@@ -33,6 +33,7 @@ codex-queue slots [N]                 # nombre de codex exec en parallèle (4 pa
 codex-queue pause | resume            # plus aucun lot ne démarre (ceux en cours finissent), ou reprise
 codex-queue fair [on|off]             # sessions servies à tour de rôle (la priorité passe d'abord)
 codex-queue interleave                # réécrit une fois l'ordre de la file en alternant les sessions
+codex-queue retry-missing             # relance les lots finis dont un fichier attendu manque
 codex-queue keep [6h]                 # durée de conservation des lots finis
 codex-queue ui [--port 8765]          # page web locale
 ```

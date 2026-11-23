@@ -24,6 +24,7 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue pause | resume                  stop launching waiting jobs (running ones finish), or start again
   codex-queue fair [on|off]                   take turns between sessions at each free slot (priority still first)
   codex-queue interleave                      rewrite the queue order once so that sessions alternate
+  codex-queue retry-missing                   queue again the finished jobs whose expected files are missing
   codex-queue dispatch                        the dispatcher itself (`add` starts it when it is not running)
   codex-queue ui [--port 8765]                web page on localhost: drag jobs to reorder them, hold, cancel, and see
                                               the images each Codex session generated
@@ -423,6 +424,29 @@ def final_state(job: dict, exit_code: int) -> str:
     return 'done'
 
 
+def lacks_outputs(job: dict) -> bool:
+    """A done or failed job that names output files and did not leave them all."""
+    return job['state'] in ('done', 'failed') and bool(job.get('skip_if_exists')) and not outputs_exist(job)
+
+
+def retry_missing_outputs() -> list:
+    """Puts back in the queue, with their priority and place, the finished jobs whose expected files are missing."""
+    retried = [job for job in all_jobs() if lacks_outputs(job)]
+    for job in retried:
+        for run_field in ('started', 'ended', 'pid'):
+            job.pop(run_field, None)
+        job['state'] = 'waiting'
+        write_job(job)
+    if retried:
+        start_dispatcher()
+    return retried
+
+
+def retry_missing(arguments) -> None:
+    for job in retry_missing_outputs():
+        print(job['id'], job['label'], 'waiting')
+
+
 def launch(job: dict) -> subprocess.Popen:
     command = ['codex', 'exec', '-C', job['workdir'], '--skip-git-repo-check']
     for directory in job['add_dirs']:
@@ -573,6 +597,7 @@ class QueuePage(BaseHTTPRequestHandler):
             jobs = all_jobs()
             queued = [job for job in jobs if job['state'] in ('waiting', 'held')]
             self.answer_json({'slots': slot_count(), 'paused': is_paused(), 'fair': is_fair(),
+                              'missing_outputs': [job['id'] for job in jobs if lacks_outputs(job)],
                               'launch_order': [job['id'] for job in launch_order(queued, running_by_session(jobs), is_fair())],
                               'keep': settings().get('keep', DEFAULT_KEEP), 'dispatcher': is_dispatcher_running(),
                               'jobs': [job_summary(job) for job in jobs]})
@@ -607,6 +632,9 @@ class QueuePage(BaseHTTPRequestHandler):
             error = None if isinstance(is_taking_turns, bool) else 'fair must be true or false'
             if error is None:
                 save_setting('fair', is_taking_turns)
+        elif path == '/api/retry-missing':
+            retry_missing_outputs()
+            error = None
         elif path == '/api/interleave':
             interleave_queue()
             error = None
@@ -671,6 +699,7 @@ def main() -> None:
     taking_turns.add_argument('state', nargs='?', choices=('on', 'off'))
     taking_turns.set_defaults(handler=set_fair)
     commands.add_parser('interleave').set_defaults(handler=interleave)
+    commands.add_parser('retry-missing').set_defaults(handler=retry_missing)
     commands.add_parser('resume').set_defaults(handler=resume)
     commands.add_parser('dispatch').set_defaults(handler=dispatch)
     sizing = commands.add_parser('slots')

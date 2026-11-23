@@ -85,6 +85,7 @@
 <header>
   <h1><span id="dispatcher" class="dot"></span>codex-queue</h1>
   <button id="pause"></button>
+  <button id="retry-missing" hidden title="remettre en attente les lots finis dont un fichier attendu manque (quota atteint, codex tué, référence absente…)"></button>
   <label title="à chaque place libre, le répartiteur sert la session qui a le moins de lots en cours (la priorité passe toujours d'abord)"><input type="checkbox" id="fair"> sessions à tour de rôle</label>
   <button id="interleave" title="réécrire une fois l'ordre de la file en alternant les sessions ; les lots déposés ensuite passent après">entrelacer les sessions</button>
   <label>places <select id="slots"></select></label>
@@ -183,6 +184,8 @@ async function refresh() {
 
 function renderHeader(state) {
   isQueuePaused = state.paused;
+  $('#retry-missing').hidden = !state.missing_outputs.length;
+  $('#retry-missing').textContent = `↻ relancer les ${state.missing_outputs.length} lots sans leurs fichiers`;
   isFairMode = state.fair;
   launchRank = new Map(state.launch_order.map((jobId, index) => [jobId, index]));
   if (document.activeElement !== $('#fair')) $('#fair').checked = state.fair;
@@ -498,6 +501,9 @@ document.addEventListener('keydown', (event) => {
 $('#slots').addEventListener('change', (event) => post('/api/slots', {count: Number(event.target.value)}));
 $('#session-filter').addEventListener('change', renderLists);
 $('#fair').addEventListener('change', (event) => post('/api/fair', {fair: event.target.checked}));
+$('#retry-missing').addEventListener('click', (event) => {
+  if (confirm(`${event.currentTarget.textContent.slice(2)} ?`)) post('/api/retry-missing', {});
+});
 $('#interleave').addEventListener('click', () => post('/api/interleave', {}));
 $('#pause').addEventListener('click', (event) => post('/api/pause', {paused: event.currentTarget.dataset.paused !== 'true'}));
 function saveSort() {
