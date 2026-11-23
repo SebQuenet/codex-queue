@@ -62,3 +62,7 @@ refuse d'agir.
 
 Les images sont celles que Codex range dans `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), retrouvées
 grâce à la ligne `session id:` en tête du journal du lot.
+
+## Licence
+
+MIT, voir [LICENSE](LICENSE).
