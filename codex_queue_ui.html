@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codex-queue</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f25; --row: #22262d; --row-hover: #2a2f37; --line: #313640;
+    --text: #e4e6ea; --muted: #8b919c; --accent: #6aa6ff; --running: #4cc38a; --held: #d9a441;
+    --failed: #e5534b; --done: #6b7380; --drop: #6aa6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 15px; }
+  header label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  select, button { background: var(--row); color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+    padding: 3px 8px; font: inherit; cursor: pointer; }
+  button:hover { background: var(--row-hover); }
+  button.danger:hover { border-color: var(--failed); color: var(--failed); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--done); margin-right: 6px; }
+  .dot.on { background: var(--running); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 6px; }
+  h2:first-child { margin-top: 0; }
+  .rows { display: flex; flex-direction: column; gap: 3px; min-height: 8px; }
+  .row { display: grid; grid-template-columns: 14px 30px minmax(0, 1fr) auto auto; gap: 8px; align-items: center;
+    background: var(--row); border-radius: 4px; padding: 6px 8px; cursor: pointer; border-left: 3px solid transparent; }
+  .row:hover { background: var(--row-hover); }
+  .row.selected { outline: 1px solid var(--accent); }
+  .row.running { border-left-color: var(--running); }
+  .row.held { border-left-color: var(--held); opacity: .7; }
+  .row.failed { border-left-color: var(--failed); }
+  .row.cancelled, .row.done { opacity: .75; }
+  .row.dragging { opacity: .3; }
+  .row.drop-before { box-shadow: 0 -2px 0 var(--drop); }
+  .row.drop-after { box-shadow: 0 2px 0 var(--drop); }
+  .handle { color: var(--muted); cursor: grab; user-select: none; }
+  .prio { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .title { overflow: hidden; }
+  .title b { font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip { display: inline-block; padding: 0 6px; border-radius: 9px; background: #2d3440; color: #b8c7e0; font-size: 11px;
+    cursor: pointer; margin-left: 6px; }
+  .chip:hover { background: var(--accent); color: #000; }
+  .meta { color: var(--muted); font-size: 12px; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 4px; }
+  .actions button { padding: 1px 6px; }
+  .empty { color: var(--muted); font-style: italic; padding: 4px 0; }
+  aside { background: var(--panel); border-radius: 6px; padding: 14px; position: sticky; top: 64px;
+    max-height: calc(100vh - 80px); overflow: auto; }
+  aside h3 { margin: 0 0 4px; font-size: 15px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 10px 0; font-size: 12px; }
+  dt { color: var(--muted); } dd { margin: 0; word-break: break-all; }
+  pre { background: #0e1013; border-radius: 4px; padding: 8px; font-size: 11.5px; white-space: pre-wrap;
+    word-break: break-word; max-height: 50vh; overflow: auto; margin: 6px 0; }
+  details summary { cursor: pointer; color: var(--muted); margin-top: 12px; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin: 6px 0; }
+  .gallery img { width: 100%; aspect-ratio: 1; object-fit: contain; background: #0e1013; border-radius: 4px; cursor: zoom-in; }
+  .group-title { margin: 12px 0 2px; font-size: 12px; color: var(--muted); }
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.9); display: none; align-items: center;
+    justify-content: center; z-index: 10; flex-direction: column; gap: 8px; }
+  #lightbox.open { display: flex; }
+  #lightbox img { max-width: 95vw; max-height: 88vh; object-fit: contain; }
+  #lightbox .caption { color: var(--muted); font-size: 12px; }
+  #lightbox a { color: var(--accent); }
+  #error { color: var(--failed); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="dispatcher" class="dot"></span>codex-queue</h1>
+  <label>places <select id="slots"></select></label>
+  <label>session <select id="session-filter"><option value="">toutes</option></select></label>
+  <label><input type="checkbox" id="show-finished" checked> lots finis</label>
+  <span id="counts" class="sub"></span>
+  <span id="error"></span>
+</header>
+<main>
+  <section>
+    <h2>En cours</h2><div id="running" class="rows"></div>
+    <h2>File d'attente — glisser pour réordonner</h2><div id="queue" class="rows"></div>
+    <div id="finished-block"><h2>Finis</h2><div id="finished" class="rows"></div></div>
+  </section>
+  <aside id="panel"><p class="empty">Cliquer sur un lot pour voir son journal et ses images, ou sur une session pour toutes ses images.</p></aside>
+</main>
+<div id="lightbox"><img alt=""><div class="caption"></div></div>
+<script>
+const POLL_MILLISECONDS = 3000;
+const FINISHED_STATES = ['done', 'failed', 'cancelled'];
+let jobs = [];
+let selection = null; // {kind: 'job', id} or {kind: 'session', name}
+let draggedId = null;
+let lightboxImages = [];
+let lightboxIndex = 0;
+
+const $ = (selector) => document.querySelector(selector);
+const escapeHtml = (text) => String(text ?? '').replace(/[&<>"']/g, (character) =>
+  ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character]));
+const queueKey = (job) => job.order ?? job.created;
+const byQueueOrder = (first, second) => first.priority - second.priority || queueKey(first) - queueKey(second);
+const clock = (seconds) => seconds ? new Date(seconds * 1000).toLocaleString('fr-FR',
+  {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '—';
+const elapsed = (from, to) => {
+  const minutes = Math.round(((to ?? Date.now() / 1000) - from) / 60);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
+};
+const imageUrl = (job, name) => `/images/${encodeURIComponent(job.codex_session)}/${encodeURIComponent(name)}`;
+
+async function post(path, payload) {
+  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+  const answer = await response.json();
+  $('#error').textContent = answer.error ?? '';
+  await refresh();
+}
+const act = (action, ids, extra = {}) => post('/api/action', {action, ids, ...extra});
+
+async function refresh() {
+  if (draggedId) return;
+  try {
+    const state = await (await fetch('/api/jobs')).json();
+    jobs = state.jobs;
+    renderHeader(state);
+    renderLists();
+    renderPanel();
+  } catch (failure) {
+    $('#error').textContent = 'serveur injoignable';
+  }
+}
+
+function renderHeader(state) {
+  $('#dispatcher').classList.toggle('on', state.dispatcher);
+  $('#dispatcher').title = state.dispatcher ? 'répartiteur actif' : 'répartiteur arrêté';
+  const slots = $('#slots');
+  if (document.activeElement !== slots) {
+    slots.innerHTML = Array.from({length: 32}, (_, index) => `<option ${index + 1 === state.slots ? 'selected' : ''}>${index + 1}</option>`).join('');
+  }
+  const filter = $('#session-filter');
+  const sessions = [...new Set(jobs.map((job) => job.session))].sort();
+  const chosen = filter.value;
+  filter.innerHTML = '<option value="">toutes</option>' + sessions.map((session) =>
+    `<option ${session === chosen ? 'selected' : ''}>${escapeHtml(session)}</option>`).join('');
+  const countOf = (stateName) => jobs.filter((job) => job.state === stateName).length;
+  $('#counts').textContent = `${countOf('running')} en cours · ${countOf('waiting')} en attente · ${countOf('held')} de côté · conservés ${state.keep}`;
+}
+
+function visibleJobs() {
+  const session = $('#session-filter').value;
+  return session ? jobs.filter((job) => job.session === session) : jobs;
+}
+
+function rowHtml(job, draggable) {
+  const images = job.images.length ? `🖼 ${job.images.length}` : '';
+  let timing = '';
+  if (job.state === 'running') timing = `depuis ${elapsed(job.started)}`;
+  else if (FINISHED_STATES.includes(job.state)) timing = `${job.state} ${clock(job.ended)}`;
+  else timing = `demandé ${clock(job.created)}`;
+  const buttons = [];
+  if (job.state === 'waiting') buttons.push(`<button data-act="hold" title="mettre de côté">❚❚</button>`);
+  if (job.state === 'held') buttons.push(`<button data-act="release" title="remettre en attente">▶</button>`);
+  if (!FINISHED_STATES.includes(job.state)) buttons.push(`<button class="danger" data-act="cancel" title="annuler">✕</button>`);
+  const isSelected = selection?.kind === 'job' && selection.id === job.id;
+  return `<div class="row ${job.state} ${isSelected ? 'selected' : ''}" data-id="${job.id}" ${draggable ? 'draggable="true"' : ''}>
+    <span class="handle">${draggable ? '⋮⋮' : ''}</span>
+    <span class="prio">p${job.priority}</span>
+    <div class="title"><b>${escapeHtml(job.label)}</b><span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>
+      <div class="sub">${escapeHtml(job.project)} / ${escapeHtml(job.worktree)} · ${job.id}</div></div>
+    <span class="meta">${images}<br>${timing}</span>
+    <span class="actions">${buttons.join('')}</span>
+  </div>`;
+}
+
+function renderLists() {
+  const shown = visibleJobs();
+  const fill = (element, list, draggable) => {
+    element.innerHTML = list.length ? list.map((job) => rowHtml(job, draggable)).join('') : '<div class="empty">aucun</div>';
+  };
+  fill($('#running'), shown.filter((job) => job.state === 'running').sort((first, second) => first.started - second.started), false);
+  fill($('#queue'), queuedJobs(shown), true);
+  const showFinished = $('#show-finished').checked;
+  $('#finished-block').hidden = !showFinished;
+  if (showFinished) fill($('#finished'), shown.filter((job) => FINISHED_STATES.includes(job.state)).sort((first, second) => second.ended - first.ended), false);
+}
+
+const queuedJobs = (list) => list.filter((job) => job.state === 'waiting' || job.state === 'held').sort(byQueueOrder);
+
+// Dropping a job between two others gives it the priority of the one above (below when it lands first)
+// and an order key between theirs, so the dispatcher starts it exactly at that place.
+function placement(droppedId, beforeId) {
+  const others = queuedJobs(visibleJobs()).filter((job) => job.id !== droppedId);
+  const index = beforeId ? others.findIndex((job) => job.id === beforeId) : others.length;
+  const above = others[index - 1];
+  const below = others[index];
+  if (above && below && above.priority === below.priority) return {priority: above.priority, order: (queueKey(above) + queueKey(below)) / 2};
+  if (above) return {priority: above.priority, order: queueKey(above) + 1};
+  if (below) return {priority: below.priority, order: queueKey(below) - 1};
+  return null;
+}
+
+function clearDropMarks() {
+  document.querySelectorAll('.drop-before, .drop-after').forEach((row) => row.classList.remove('drop-before', 'drop-after'));
+}
+
+const queueElement = $('#queue');
+queueElement.addEventListener('dragstart', (event) => {
+  const row = event.target.closest('.row');
+  draggedId = row.dataset.id;
+  row.classList.add('dragging');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', draggedId);
+});
+queueElement.addEventListener('dragover', (event) => {
+  if (!draggedId) return;
+  event.preventDefault();
+  clearDropMarks();
+  const row = event.target.closest('.row');
+  if (!row || row.dataset.id === draggedId) return;
+  const isUpperHalf = event.clientY < row.getBoundingClientRect().top + row.offsetHeight / 2;
+  row.classList.add(isUpperHalf ? 'drop-before' : 'drop-after');
+});
+queueElement.addEventListener('drop', async (event) => {
+  event.preventDefault();
+  const marked = queueElement.querySelector('.drop-before, .drop-after');
+  const droppedId = draggedId;
+  let beforeId = null;
+  if (marked && marked.classList.contains('drop-before')) beforeId = marked.dataset.id;
+  else if (marked) {
+    let next = marked.nextElementSibling;
+    if (next?.dataset.id === droppedId) next = next.nextElementSibling;
+    beforeId = next?.dataset.id ?? null;
+  }
+  draggedId = null;
+  clearDropMarks();
+  const target = marked ? placement(droppedId, beforeId) : null;
+  if (target) await act('priority', [droppedId], target);
+  else refresh();
+});
+queueElement.addEventListener('dragend', () => { draggedId = null; clearDropMarks(); refresh(); });
+
+document.querySelector('main section').addEventListener('click', (event) => {
+  const row = event.target.closest('.row');
+  if (!row) return;
+  const job = jobs.find((candidate) => candidate.id === row.dataset.id);
+  const button = event.target.closest('button[data-act]');
+  if (button) {
+    if (button.dataset.act === 'cancel' && job.state === 'running' && !confirm(`Arrêter ${job.label}, en cours ?`)) return;
+    act(button.dataset.act, [job.id]);
+    return;
+  }
+  const chip = event.target.closest('.chip');
+  selection = chip ? {kind: 'session', name: chip.dataset.session} : {kind: 'job', id: job.id};
+  renderLists();
+  renderPanel(true);
+});
+
+let panelJobDetail = {id: null, prompt: '', log: ''};
+
+async function renderPanel(isNewSelection = false) {
+  const panel = $('#panel');
+  if (selection?.kind === 'session') return renderSessionPanel(panel, isNewSelection);
+  const job = selection && jobs.find((candidate) => candidate.id === selection.id);
+  if (!job) return;
+  if (isNewSelection || panelJobDetail.id !== job.id || job.state === 'running') {
+    panelJobDetail = {id: job.id, ...(await (await fetch(`/api/job/${job.id}`)).json())};
+  }
+  const logElement = panel.querySelector('pre.log');
+  const isLogAtBottom = !logElement || logElement.scrollTop + logElement.clientHeight >= logElement.scrollHeight - 20;
+  const openPrompt = panel.querySelector('details.prompt')?.open ?? false;
+  const isEditable = job.state === 'waiting' || job.state === 'held';
+  panel.innerHTML = `
+    <h3>${escapeHtml(job.label)}</h3>
+    <span class="row ${job.state}" style="display:inline;padding:1px 6px">${job.state}</span>
+    <span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>
+    ${isEditable ? `<label style="margin-left:8px;color:var(--muted)">priorité <select id="panel-priority">${
+      [1,2,3,4,5,6,7,8,9].map((priority) => `<option ${priority === job.priority ? 'selected' : ''}>${priority}</option>`).join('')}</select></label>` : ''}
+    <dl>
+      <dt>id</dt><dd>${job.id}</dd>
+      <dt>projet</dt><dd>${escapeHtml(job.project)} / ${escapeHtml(job.worktree)} (${escapeHtml(job.branch)})</dd>
+      <dt>appelant</dt><dd>${escapeHtml(job.caller) || '—'}</dd>
+      <dt>demandé</dt><dd>${clock(job.created)}</dd>
+      <dt>début</dt><dd>${clock(job.started)}</dd>
+      <dt>fin</dt><dd>${clock(job.ended)}${job.started ? ` (${elapsed(job.started, job.ended)})` : ''}</dd>
+      <dt>workdir</dt><dd>${escapeHtml(job.workdir)}</dd>
+      <dt>session codex</dt><dd>${escapeHtml(job.codex_session) || '—'}</dd>
+      <dt>attendus</dt><dd>${(job.skip_if_exists ?? []).map(escapeHtml).join('<br>') || '—'}</dd>
+    </dl>
+    <div class="group-title">Images générées (${job.images.length})</div>
+    ${galleryHtml([job])}
+    <details class="prompt" ${openPrompt ? 'open' : ''}><summary>Consigne</summary><pre>${escapeHtml(panelJobDetail.prompt)}</pre></details>
+    <div class="group-title">Journal (fin)</div>
+    <pre class="log">${escapeHtml(panelJobDetail.log) || '—'}</pre>`;
+  const newLog = panel.querySelector('pre.log');
+  if (isLogAtBottom) newLog.scrollTop = newLog.scrollHeight;
+  else if (logElement) newLog.scrollTop = logElement.scrollTop;
+  panel.querySelector('#panel-priority')?.addEventListener('change', (event) => act('priority', [job.id], {priority: Number(event.target.value)}));
+}
+
+function renderSessionPanel(panel, isNewSelection) {
+  const own = jobs.filter((job) => job.session === selection.name);
+  const total = own.reduce((sum, job) => sum + job.images.length, 0);
+  const scroll = panel.scrollTop;
+  panel.innerHTML = `<h3>Session ${escapeHtml(selection.name)}</h3>
+    <div class="sub">${own.length} lots · ${total} images · seuls les lots encore conservés sont rattachés</div>
+    ${own.filter((job) => job.images.length).sort((first, second) => (second.started ?? 0) - (first.started ?? 0)).map((job) =>
+      `<div class="group-title">${escapeHtml(job.label)} · ${job.state} · ${clock(job.started)}</div>${galleryHtml([job])}`).join('') || '<p class="empty">aucune image</p>'}`;
+  if (!isNewSelection) panel.scrollTop = scroll;
+}
+
+function galleryHtml(list) {
+  const images = list.flatMap((job) => job.images.map((name) => ({job, name})));
+  if (!images.length) return '<p class="empty">aucune</p>';
+  return `<div class="gallery">${images.map(({job, name}) =>
+    `<img loading="lazy" src="${imageUrl(job, name)}" data-job="${job.id}" data-name="${escapeHtml(name)}" title="${escapeHtml(name)}">`).join('')}</div>`;
+}
+
+$('#panel').addEventListener('click', (event) => {
+  const chip = event.target.closest('.chip');
+  if (chip) { selection = {kind: 'session', name: chip.dataset.session}; renderLists(); renderPanel(true); return; }
+  const image = event.target.closest('.gallery img');
+  if (!image) return;
+  lightboxImages = [...image.closest('aside').querySelectorAll('.gallery img')];
+  lightboxIndex = lightboxImages.indexOf(image);
+  showLightbox();
+});
+
+function showLightbox() {
+  const image = lightboxImages[lightboxIndex];
+  const job = jobs.find((candidate) => candidate.id === image.dataset.job);
+  $('#lightbox img').src = image.src;
+  $('#lightbox .caption').innerHTML = `${escapeHtml(job?.label)} · ${escapeHtml(image.dataset.name)} · ${lightboxIndex + 1}/${lightboxImages.length}
+    · <a href="${image.src}" target="_blank">ouvrir</a>`;
+  $('#lightbox').classList.add('open');
+}
+$('#lightbox').addEventListener('click', (event) => { if (event.target.tagName !== 'A') $('#lightbox').classList.remove('open'); });
+document.addEventListener('keydown', (event) => {
+  if (!$('#lightbox').classList.contains('open')) return;
+  if (event.key === 'Escape') $('#lightbox').classList.remove('open');
+  if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+    lightboxIndex = (lightboxIndex + (event.key === 'ArrowRight' ? 1 : -1) + lightboxImages.length) % lightboxImages.length;
+    showLightbox();
+  }
+});
+
+$('#slots').addEventListener('change', (event) => post('/api/slots', {count: Number(event.target.value)}));
+$('#session-filter').addEventListener('change', renderLists);
+$('#show-finished').addEventListener('change', renderLists);
+
+refresh();
+setInterval(refresh, POLL_MILLISECONDS);
+</script>
+</body>
+</html>

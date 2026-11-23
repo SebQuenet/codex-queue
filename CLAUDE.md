@@ -1,0 +1,83 @@
+# codex-queue
+
+File d'attente commune aux lots `codex exec` qui **génèrent des images**, pour toutes les sessions Claude et tous les
+projets. Les lots qui écrivent du texte ne passent pas par elle : ils se lancent directement par `codex exec`. Lancés en
+parallèle, les lots saturent la connexion de Codex et passent leur temps à se reconnecter ; la file en fait tourner
+quelques-uns à la fois, les plus prioritaires d'abord, et laisse l'utilisateur réordonner la file quand il veut.
+
+Deux fichiers : `codex_queue.py` (Python 3, bibliothèque standard seulement) et `codex_queue_ui.html`, la page servie
+par `codex-queue ui`. Commande installée : `codex-queue`,
+lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
+
+## Fonctionnement
+
+- **Un lot** est un fichier JSON dans `~/.local/state/codex-queue/jobs/<id>.json` (`$CODEX_QUEUE_DIR` pour changer de
+  dossier) : identifiant, libellé, session, priorité, état, dossier de travail (`-C`), dossiers ajoutés
+  (`--add-dir`), consigne, et fichiers attendus (`skip_if_exists`).
+- **L'origine** du lot, relevée au dépôt dans le dossier `--origin` (le dossier courant par défaut) : le **projet**
+  (le dépôt git principal, commun à ses worktrees, suivi du sous-dossier quand le projet en est un :
+  `mon-jeu`, `monorepo/app`…), le **worktree** et sa **branche**.
+- **L'appelant**, facultatif : `--caller`, sinon `$CODEX_QUEUE_CALLER`, sinon `$CLAUDE_CODE_SESSION_ID` (l'identifiant
+  de la session Claude Code qui a déposé le lot).
+- **La session** regroupe les lots dans la liste : `--session`, sinon `$CODEX_QUEUE_SESSION`, sinon la branche (une
+  session Claude travaille dans son propre worktree, donc sa propre branche).
+- **La priorité** va de 1 (urgent) à 9 (fond) ; à priorité égale, le plus ancien part d'abord, sauf si la page a
+  donné au lot un champ `order` (glisser-déposer) : il remplace alors l'heure de dépôt dans le tri.
+- **Les états** : `waiting` (attend son tour), `held` (mis de côté, ignoré par le répartiteur), `running`, puis
+  `done`, `failed` ou `cancelled`. Les lots finis restent dans la file le temps fixé par `codex-queue keep` (6 h par défaut,
+  réglage relu en direct), puis leur fiche est effacée ; leur journal reste dans `logs/`.
+- **Le répartiteur** (`codex-queue dispatch`) est unique, garanti par un verrou `flock` sur
+  `dispatcher.lock`. `add` et `release` le démarrent s'il ne tourne pas ; il s'arrête seul quand la file est vide.
+  Toutes les 5 secondes il relève les lots finis, puis lance les lots en attente jusqu'au nombre de places
+  (`codex-queue slots`, 4 par défaut, rangé dans `settings.json` et relu à chaque tour : le changer agit tout de suite,
+  sans relancer le répartiteur ; en le baissant, les lots en cours finissent, rien n'est arrêté).
+  Chaque `codex exec` part dans sa propre session de processus (il survit à la session Claude qui l'a déposé), sa
+  sortie dans `logs/<id>.log`.
+- **Un lot dont tous les fichiers attendus existent** est marqué `done` sans être lancé : on peut redéposer un lot
+  sans craindre de repeindre ce qui est déjà fait.
+- Un répartiteur relancé retrouve les lots en cours par leur pid.
+- **La page** (`codex-queue ui`, http://127.0.0.1:8765/, locale seulement) relit la file toutes les 3 secondes. On y
+  glisse les lots en attente pour les réordonner (le lot prend la priorité de son voisin du dessus), on les met de côté,
+  on les annule ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
+  `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), la session codex étant lue sur la ligne
+  `session id:` du journal. Un clic sur une session montre les images de tous ses lots encore conservés.
+
+## Commandes
+
+```sh
+codex-queue add --priority 5 --label <lot> --workdir <dossier> --prompt-file <consigne.txt> \
+  [--add-dir <dossier>]... [--skip-if-exists <fichier>...] [--origin <worktree>] [--session <nom>] [--caller <id>] \
+  [-- <options de codex exec : -s workspace-write, -o <fichier>, -m <modèle>…>]
+codex-queue wait <id>                           # attend la fin du lot, affiche son état et son journal
+codex-queue list [--session <nom>]              # par session, avec projet / worktree et appelant ; pour chaque
+                                                # lot : état, priorité, id, heures de demande, de début et de
+                                                # fin de génération (null tant qu'elles n'existent pas), libellé
+codex-queue list --since 1h                     # ajoute les lots finis dans l'heure
+codex-queue list --all                          # ajoute tous les lots finis encore gardés
+codex-queue keep [2d]                           # montre ou fixe la durée de conservation des lots finis
+codex-queue priority <1-9> <id>... | --session <nom> | --label <préfixe>
+codex-queue hold <sélection>                    # met de côté des lots en attente
+codex-queue release <sélection>                 # les remet en attente
+codex-queue cancel <sélection>                  # abandonne ceux qui attendent, arrête ceux qui tournent
+codex-queue slots [N]                           # montre ou fixe le nombre de codex exec en parallèle (1 à 32)
+codex-queue ui [--port 8765]                    # page web locale de la file
+```
+
+Les sélecteurs (identifiants, `--session`, `--label`) se combinent ; sans sélecteur, la commande refuse d'agir.
+
+`add` affiche l'identifiant du lot. `--workdir` est le `-C` de `codex exec`, les options après `--` lui sont passées
+telles quelles. Pour être prévenu de la fin d'un lot, une session lance `codex-queue wait <id>` en arrière-plan : la
+commande se termine quand le lot est fini (code 0 s'il a réussi).
+
+## Règles
+
+- Après une modification de `codex_queue.py`, relancer le répartiteur (le tuer par son pid ; `codex-queue release
+  --label x` en démarre un neuf) : celui qui tourne garde l'ancien code. Les lots en cours continuent, il les retrouve
+  par leur pid.
+
+- Un lot qui génère des images passe toujours par `codex-queue add`, jamais par `codex exec` direct. Un lot qui écrit
+  du texte (rédaction, relecture) se lance directement par `codex exec` : la file ne le concerne pas.
+- Ne pas tuer un répartiteur avec `pkill -f codex_queue` depuis un shell dont la ligne de commande contient ce motif
+  (il se tue lui-même) : viser son pid (`ps -eo pid,args | grep -E "[c]odex.queue(.py)? dispatch"`).
+- Le programme reste générique : rien de propre à un projet (les règles de peinture d'un projet vont dans sa consigne
+  et dans ses propres skills).
