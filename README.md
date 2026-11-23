@@ -30,6 +30,7 @@ codex-queue priority 2 <id>...        # nouvelle priorité (1 urgent … 9 fond)
 codex-queue hold | release <sélection>  # mettre de côté, remettre en attente
 codex-queue cancel <sélection>        # abandonner un lot en attente, arrêter un lot en cours
 codex-queue slots [N]                 # nombre de codex exec en parallèle (4 par défaut)
+codex-queue pause | resume            # plus aucun lot ne démarre (ceux en cours finissent), ou reprise
 codex-queue keep [6h]                 # durée de conservation des lots finis
 codex-queue ui [--port 8765]          # page web locale
 ```

@@ -31,6 +31,7 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
   Toutes les 5 secondes il relève les lots finis, puis lance les lots en attente jusqu'au nombre de places
   (`codex-queue slots`, 4 par défaut, rangé dans `settings.json` et relu à chaque tour : le changer agit tout de suite,
   sans relancer le répartiteur ; en le baissant, les lots en cours finissent, rien n'est arrêté).
+  `codex-queue pause` (réglage `paused`, relu de même) l'empêche de lancer quoi que ce soit ; `resume` lève la pause.
   Chaque `codex exec` part dans sa propre session de processus (il survit à la session Claude qui l'a déposé), sa
   sortie dans `logs/<id>.log`.
 - **Un lot dont tous les fichiers attendus existent** est marqué `done` sans être lancé : on peut redéposer un lot
@@ -38,7 +39,8 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
 - Un répartiteur relancé retrouve les lots en cours par leur pid.
 - **La page** (`codex-queue ui`, http://127.0.0.1:8765/, locale seulement) relit la file toutes les 3 secondes. On y
   glisse les lots en attente pour les réordonner (le lot prend la priorité de son voisin du dessus), on les met de côté,
-  on les annule ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
+  on les annule, on met toute la file en pause ; on trie les listes par priorité, demande, début, fin, libellé ou
+  session (le glisser-déposer ne marche qu'en « ordre de passage ») ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
   `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), la session codex étant lue sur la ligne
   `session id:` du journal. Un clic sur une session montre les images de tous ses lots encore conservés.
 
@@ -60,6 +62,7 @@ codex-queue hold <sélection>                    # met de côté des lots en att
 codex-queue release <sélection>                 # les remet en attente
 codex-queue cancel <sélection>                  # abandonne ceux qui attendent, arrête ceux qui tournent
 codex-queue slots [N]                           # montre ou fixe le nombre de codex exec en parallèle (1 à 32)
+codex-queue pause | resume                      # met toute la file en pause (les lots en cours finissent), ou la relance
 codex-queue ui [--port 8765]                    # page web locale de la file
 ```
 

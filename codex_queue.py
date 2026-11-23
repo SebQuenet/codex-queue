@@ -21,6 +21,7 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue hold | release <selector>      keep jobs out of the dispatcher, or give them back
   codex-queue cancel <selector>              drop waiting jobs, stop running ones
   codex-queue slots [N]                       how many codex exec run at once (4 by default), read live
+  codex-queue pause | resume                  stop launching waiting jobs (running ones finish), or start again
   codex-queue dispatch                        the dispatcher itself (`add` starts it when it is not running)
   codex-queue ui [--port 8765]                web page on localhost: drag jobs to reorder them, hold, cancel, and see
                                               the images each Codex session generated
@@ -126,6 +127,27 @@ def kept_seconds() -> int:
         return seconds_of(str(settings().get('keep', DEFAULT_KEEP)))
     except ValueError:
         return seconds_of(DEFAULT_KEEP)
+
+
+def is_paused() -> bool:
+    """While paused, the dispatcher launches nothing; running jobs go on to their end."""
+    return settings().get('paused') is True
+
+
+def set_paused(is_pausing: bool) -> None:
+    save_setting('paused', is_pausing)
+    if not is_pausing:
+        start_dispatcher()
+
+
+def pause(arguments) -> None:
+    set_paused(True)
+    print('queue paused: no new job starts, running ones finish')
+
+
+def resume(arguments) -> None:
+    set_paused(False)
+    print('queue resumed')
 
 
 def set_slots(arguments) -> None:
@@ -295,6 +317,8 @@ def show(arguments) -> None:
     if arguments.session:
         jobs = [job for job in jobs if job.get('session') == arguments.session]
     sessions = sorted({job.get('session', '?') for job in jobs})
+    if is_paused():
+        print('** queue paused: `codex-queue resume` to start waiting jobs again **')
     for session in sessions:
         own = sorted((job for job in jobs if job.get('session', '?') == session), key=lambda job: (STATES.index(job['state']), *queue_key(job)))
         counts = ', '.join(f"{sum(1 for job in own if job['state'] == state)} {state}" for state in STATES if any(job['state'] == state for job in own))
@@ -378,7 +402,7 @@ def dispatch(arguments) -> None:
         running = sum(1 for job in jobs if job['state'] == 'running')
         waiting = sorted((job for job in jobs if job['state'] == 'waiting'), key=queue_key)
         for job in waiting:
-            if running >= slot_count():
+            if running >= slot_count() or is_paused():
                 break
             if outputs_exist(job):
                 job.update(state='done', ended=time.time())
@@ -482,7 +506,7 @@ class QueuePage(BaseHTTPRequestHandler):
         if not parts:
             self.answer(UI_PAGE.read_bytes(), 'text/html; charset=utf-8')
         elif parts == ['api', 'jobs']:
-            self.answer_json({'slots': slot_count(), 'keep': settings().get('keep', DEFAULT_KEEP), 'dispatcher': is_dispatcher_running(),
+            self.answer_json({'slots': slot_count(), 'paused': is_paused(), 'keep': settings().get('keep', DEFAULT_KEEP), 'dispatcher': is_dispatcher_running(),
                               'jobs': [job_summary(job) for job in all_jobs()]})
         elif len(parts) == 3 and parts[:2] == ['api', 'job'] and (job := job_by_id(parts[2])):
             self.answer_json({'prompt': job.get('prompt', ''), 'log': log_tail(job['id'])})
@@ -510,6 +534,11 @@ class QueuePage(BaseHTTPRequestHandler):
             error = None if isinstance(count, int) and 1 <= count <= 32 else 'count must be an integer from 1 to 32'
             if error is None:
                 save_setting('slots', count)
+        elif path == '/api/pause':
+            is_pausing = request.get('paused')
+            error = None if isinstance(is_pausing, bool) else 'paused must be true or false'
+            if error is None:
+                set_paused(is_pausing)
         else:
             return self.answer_json({'error': 'not found'}, 404)
         self.answer_json({'error': error} if error else {'ok': True}, 400 if error else 200)
@@ -561,6 +590,8 @@ def main() -> None:
     selector('hold', hold)
     selector('release', release)
     selector('cancel', cancel)
+    commands.add_parser('pause').set_defaults(handler=pause)
+    commands.add_parser('resume').set_defaults(handler=resume)
     commands.add_parser('dispatch').set_defaults(handler=dispatch)
     sizing = commands.add_parser('slots')
     sizing.add_argument('count', type=int, nargs='?', choices=range(1, 33), metavar='1-32')
