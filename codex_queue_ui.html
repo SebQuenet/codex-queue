@@ -27,7 +27,7 @@
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 6px; }
   h2:first-child { margin-top: 0; }
   .rows { display: flex; flex-direction: column; gap: 3px; min-height: 8px; }
-  .row { display: grid; grid-template-columns: 14px 30px minmax(0, 1fr) auto auto; gap: 8px; align-items: center;
+  .row { display: grid; grid-template-columns: 14px 34px 30px minmax(0, 1fr) auto auto; gap: 8px; align-items: center;
     background: var(--row); border-radius: 4px; padding: 6px 8px; cursor: pointer; border-left: 3px solid transparent; }
   .row:hover { background: var(--row-hover); }
   .row.selected { outline: 1px solid var(--accent); }
@@ -39,6 +39,7 @@
   .row.drop-before { box-shadow: 0 -2px 0 var(--drop); }
   .row.drop-after { box-shadow: 0 2px 0 var(--drop); }
   .handle { color: var(--muted); cursor: grab; user-select: none; }
+  .rank { font-variant-numeric: tabular-nums; color: var(--accent); text-align: right; }
   .prio { font-variant-numeric: tabular-nums; color: var(--muted); }
   .title { overflow: hidden; }
   .title b { font-weight: 600; }
@@ -95,7 +96,7 @@
 <main>
   <section>
     <h2>En cours</h2><div id="running" class="rows"></div>
-    <h2>File d'attente<span id="drag-hint"> — glisser pour réordonner</span></h2><div id="queue" class="rows"></div>
+    <h2>File d'attente <span id="queue-count"></span><span id="drag-hint"> — glisser pour réordonner</span></h2><div id="queue" class="rows"></div>
     <div id="finished-block"><h2>Finis</h2><div id="finished" class="rows"></div></div>
   </section>
   <aside id="panel"><p class="empty">Cliquer sur un lot pour voir son journal et ses images, ou sur une session pour toutes ses images.</p></aside>
@@ -193,7 +194,7 @@ function visibleJobs() {
   return session ? jobs.filter((job) => job.session === session) : jobs;
 }
 
-function rowHtml(job, draggable) {
+function rowHtml(job, draggable, rank = null) {
   const images = job.images.length ? `🖼 ${job.images.length}` : '';
   let timing = '';
   if (job.state === 'running') timing = `depuis ${elapsed(job.started)}`;
@@ -206,6 +207,7 @@ function rowHtml(job, draggable) {
   const isSelected = selection?.kind === 'job' && selection.id === job.id;
   return `<div class="row ${job.state} ${isSelected ? 'selected' : ''}" data-id="${job.id}" ${draggable ? 'draggable="true"' : ''}>
     <span class="handle">${draggable ? '⋮⋮' : ''}</span>
+    <span class="rank" title="rang dans la liste">${rank === null ? '' : `#${rank}`}</span>
     <span class="prio">p${job.priority}</span>
     <div class="title"><b>${escapeHtml(job.label)}</b><span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>
       <div class="sub">${escapeHtml(job.project)} / ${escapeHtml(job.worktree)} · ${job.id}</div></div>
@@ -216,14 +218,16 @@ function rowHtml(job, draggable) {
 
 function renderLists() {
   const shown = visibleJobs();
-  const fill = (element, list, draggable) => {
-    element.innerHTML = list.length ? list.map((job) => rowHtml(job, draggable)).join('') : '<div class="empty">aucun</div>';
+  const fill = (element, list, draggable, isRanked = false) => {
+    element.innerHTML = list.length ? list.map((job, index) => rowHtml(job, draggable, isRanked ? index + 1 : null)).join('') : '<div class="empty">aucun</div>';
   };
   $('#sort-direction').textContent = sort.isDescending ? '↓' : '↑';
   $('#sort-direction').disabled = isQueueOrder();
   $('#drag-hint').hidden = !isQueueOrder();
   fill($('#running'), sortedJobs(shown.filter((job) => job.state === 'running'), (first, second) => first.started - second.started), false);
-  fill($('#queue'), sortedJobs(queuedJobs(shown), byQueueOrder), isQueueOrder());
+  const queued = sortedJobs(queuedJobs(shown), byQueueOrder);
+  $('#queue-count').textContent = `(${queued.length})`;
+  fill($('#queue'), queued, isQueueOrder(), true);
   const showFinished = $('#show-finished').checked;
   $('#finished-block').hidden = !showFinished;
   if (showFinished) fill($('#finished'), sortedJobs(shown.filter((job) => FINISHED_STATES.includes(job.state)), (first, second) => second.ended - first.ended), false);
