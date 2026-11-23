@@ -40,6 +40,9 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
   sortie dans `logs/<id>.log`.
 - **Un lot dont tous les fichiers attendus existent** est marqué `done` sans être lancé : on peut redéposer un lot
   sans craindre de repeindre ce qui est déjà fait.
+- **Un lot qui déclare des fichiers attendus** n'est marqué `done` que s'ils existent tous à sa fin, sinon `failed` :
+  `codex exec` peut sortir avec le code 0 sans rien peindre (quota d'images atteint, référence absente), et un lot
+  suivi par son seul pid (lancé par un répartiteur précédent) n'a pas de code de sortie.
 - Un répartiteur relancé retrouve les lots en cours par leur pid.
 - **La page** (`codex-queue ui`, http://127.0.0.1:8765/, locale seulement) relit la file toutes les 3 secondes. On y
   glisse les lots en attente pour les réordonner (le lot prend la priorité de son voisin du dessus), on les met de côté,

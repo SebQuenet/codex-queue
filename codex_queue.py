@@ -414,6 +414,15 @@ def outputs_exist(job: dict) -> bool:
     return bool(files) and all(Path(file).exists() for file in files)
 
 
+def final_state(job: dict, exit_code: int) -> str:
+    """A job that names its outputs succeeds only if they all exist: codex exec can exit 0 without painting
+    (image quota reached, missing reference), and a job followed by its pid alone has no exit code at all."""
+    has_outputs = bool(job.get('skip_if_exists'))
+    if exit_code != 0 or (has_outputs and not outputs_exist(job)):
+        return 'failed'
+    return 'done'
+
+
 def launch(job: dict) -> subprocess.Popen:
     command = ['codex', 'exec', '-C', job['workdir'], '--skip-git-repo-check']
     for directory in job['add_dirs']:
@@ -448,7 +457,7 @@ def dispatch(arguments) -> None:
             finished = child.poll() is not None if child else not is_alive(job.get('pid', 0))
             if finished:
                 code = child.returncode if child else 0
-                job.update(state='done' if code == 0 else 'failed', ended=time.time())
+                job.update(state=final_state(job, code), ended=time.time())
                 write_job(job)
                 children.pop(job['id'], None)
         for job in jobs:
