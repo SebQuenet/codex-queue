@@ -47,7 +47,8 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
   (la file affiche l'ordre de lancement calculé par le serveur ; en tour de rôle, le glisser-déposer est désactivé) ; on trie les listes par priorité, demande, début, fin, libellé ou
   session (le glisser-déposer ne marche qu'en « ordre de passage ») ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
   `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), la session codex étant lue sur la ligne
-  `session id:` du journal. Un clic sur une session montre les images de tous ses lots encore conservés.
+  `session id:` du journal. Un clic sur une session montre les images de tous ses lots encore conservés et fixe d'un coup la priorité de
+  tous ses lots en attente ou mis de côté.
 
 ## Commandes
 

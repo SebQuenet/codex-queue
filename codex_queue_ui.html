@@ -443,11 +443,21 @@ function renderSessionPanel(panel, isNewSelection) {
   const own = jobs.filter((job) => job.session === selection.name);
   const total = own.reduce((sum, job) => sum + job.images.length, 0);
   const scroll = panel.scrollTop;
+  // The refresh would close an open priority list: leave the panel alone while it has the focus.
+  if (!isNewSelection && document.activeElement === panel.querySelector('#session-priority')) return;
+  const queuedIds = queuedJobs(own).map((job) => job.id);
+  const priorities = new Set(queuedJobs(own).map((job) => job.priority));
+  const sharedPriority = priorities.size === 1 ? [...priorities][0] : null;
+  const priorityControl = queuedIds.length ? `<label style="color:var(--muted)">priorité des ${queuedIds.length} lots en attente
+    <select id="session-priority">${sharedPriority === null ? '<option selected disabled>mixte</option>' : ''}${
+      [1,2,3,4,5,6,7,8,9].map((priority) => `<option ${priority === sharedPriority ? 'selected' : ''}>${priority}</option>`).join('')}</select></label>` : '';
   panel.innerHTML = `<h3>Session ${escapeHtml(selection.name)}</h3>
     <div class="sub">${own.length} lots · ${total} images · seuls les lots encore conservés sont rattachés</div>
+    ${priorityControl}
     ${own.filter((job) => job.images.length).sort((first, second) => (second.started ?? 0) - (first.started ?? 0)).map((job) =>
       `<div class="group-title">${escapeHtml(job.label)} · ${job.state} · ${clock(job.started)}</div>${galleryHtml([job])}`).join('') || '<p class="empty">aucune image</p>'}`;
   if (!isNewSelection) panel.scrollTop = scroll;
+  panel.querySelector('#session-priority')?.addEventListener('change', (event) => act('priority', queuedIds, {priority: Number(event.target.value)}));
 }
 
 function galleryHtml(list) {
