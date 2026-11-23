@@ -22,6 +22,8 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue cancel <selector>              drop waiting jobs, stop running ones
   codex-queue slots [N]                       how many codex exec run at once (4 by default), read live
   codex-queue pause | resume                  stop launching waiting jobs (running ones finish), or start again
+  codex-queue fair [on|off]                   take turns between sessions at each free slot (priority still first)
+  codex-queue interleave                      rewrite the queue order once so that sessions alternate
   codex-queue dispatch                        the dispatcher itself (`add` starts it when it is not running)
   codex-queue ui [--port 8765]                web page on localhost: drag jobs to reorder them, hold, cancel, and see
                                               the images each Codex session generated
@@ -127,6 +129,59 @@ def kept_seconds() -> int:
         return seconds_of(str(settings().get('keep', DEFAULT_KEEP)))
     except ValueError:
         return seconds_of(DEFAULT_KEEP)
+
+
+def is_fair() -> bool:
+    """In fair mode, sessions take turns: a free slot goes to the session with the fewest jobs running."""
+    return settings().get('fair') is True
+
+
+def launch_order(candidates: list, running_by_session: dict, is_taking_turns: bool) -> list:
+    """The order in which the dispatcher would start these jobs; taking turns, priority still comes first."""
+    ordered = sorted(candidates, key=queue_key)
+    if not is_taking_turns:
+        return ordered
+    served = dict(running_by_session)
+    launched = []
+    while ordered:
+        chosen = min(ordered, key=lambda job: (job['priority'], served.get(job.get('session'), 0), queue_key(job)))
+        ordered.remove(chosen)
+        served[chosen.get('session')] = served.get(chosen.get('session'), 0) + 1
+        launched.append(chosen)
+    return launched
+
+
+def running_by_session(jobs: list) -> dict:
+    counts: dict = {}
+    for job in jobs:
+        if job['state'] == 'running':
+            counts[job.get('session')] = counts.get(job.get('session'), 0) + 1
+    return counts
+
+
+INTERLEAVE_STEP_SECONDS = 0.001
+
+
+def interleave_queue() -> int:
+    """Gives waiting and held jobs an `order` alternating between sessions; jobs queued later come after them."""
+    queued = [job for job in all_jobs() if job['state'] in ('waiting', 'held')]
+    if not queued:
+        return 0
+    first_key = min(queue_key(job)[1] for job in queued)
+    for index, job in enumerate(launch_order(queued, {}, True)):
+        job['order'] = first_key + index * INTERLEAVE_STEP_SECONDS
+        write_job(job)
+    return len(queued)
+
+
+def interleave(arguments) -> None:
+    print(f'{interleave_queue()} jobs reordered, sessions alternate')
+
+
+def set_fair(arguments) -> None:
+    if arguments.state is not None:
+        save_setting('fair', arguments.state == 'on')
+    print('sessions take turns' if is_fair() else 'queue order')
 
 
 def is_paused() -> bool:
@@ -400,7 +455,7 @@ def dispatch(arguments) -> None:
             if job['state'] in ('done', 'failed', 'cancelled') and time.time() - job.get('ended', job['created']) > kept_seconds():
                 (JOBS / f"{job['id']}.json").unlink(missing_ok=True)
         running = sum(1 for job in jobs if job['state'] == 'running')
-        waiting = sorted((job for job in jobs if job['state'] == 'waiting'), key=queue_key)
+        waiting = launch_order([job for job in jobs if job['state'] == 'waiting'], running_by_session(jobs), is_fair())
         for job in waiting:
             if running >= slot_count() or is_paused():
                 break
@@ -506,8 +561,12 @@ class QueuePage(BaseHTTPRequestHandler):
         if not parts:
             self.answer(UI_PAGE.read_bytes(), 'text/html; charset=utf-8')
         elif parts == ['api', 'jobs']:
-            self.answer_json({'slots': slot_count(), 'paused': is_paused(), 'keep': settings().get('keep', DEFAULT_KEEP), 'dispatcher': is_dispatcher_running(),
-                              'jobs': [job_summary(job) for job in all_jobs()]})
+            jobs = all_jobs()
+            queued = [job for job in jobs if job['state'] in ('waiting', 'held')]
+            self.answer_json({'slots': slot_count(), 'paused': is_paused(), 'fair': is_fair(),
+                              'launch_order': [job['id'] for job in launch_order(queued, running_by_session(jobs), is_fair())],
+                              'keep': settings().get('keep', DEFAULT_KEEP), 'dispatcher': is_dispatcher_running(),
+                              'jobs': [job_summary(job) for job in jobs]})
         elif len(parts) == 3 and parts[:2] == ['api', 'job'] and (job := job_by_id(parts[2])):
             self.answer_json({'prompt': job.get('prompt', ''), 'log': log_tail(job['id'])})
         elif len(parts) == 3 and parts[0] == 'images' and all(SAFE_NAME.match(part) for part in parts[1:]) \
@@ -534,6 +593,14 @@ class QueuePage(BaseHTTPRequestHandler):
             error = None if isinstance(count, int) and 1 <= count <= 32 else 'count must be an integer from 1 to 32'
             if error is None:
                 save_setting('slots', count)
+        elif path == '/api/fair':
+            is_taking_turns = request.get('fair')
+            error = None if isinstance(is_taking_turns, bool) else 'fair must be true or false'
+            if error is None:
+                save_setting('fair', is_taking_turns)
+        elif path == '/api/interleave':
+            interleave_queue()
+            error = None
         elif path == '/api/pause':
             is_pausing = request.get('paused')
             error = None if isinstance(is_pausing, bool) else 'paused must be true or false'
@@ -591,6 +658,10 @@ def main() -> None:
     selector('release', release)
     selector('cancel', cancel)
     commands.add_parser('pause').set_defaults(handler=pause)
+    taking_turns = commands.add_parser('fair')
+    taking_turns.add_argument('state', nargs='?', choices=('on', 'off'))
+    taking_turns.set_defaults(handler=set_fair)
+    commands.add_parser('interleave').set_defaults(handler=interleave)
     commands.add_parser('resume').set_defaults(handler=resume)
     commands.add_parser('dispatch').set_defaults(handler=dispatch)
     sizing = commands.add_parser('slots')

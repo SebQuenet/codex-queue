@@ -32,6 +32,10 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
   (`codex-queue slots`, 4 par défaut, rangé dans `settings.json` et relu à chaque tour : le changer agit tout de suite,
   sans relancer le répartiteur ; en le baissant, les lots en cours finissent, rien n'est arrêté).
   `codex-queue pause` (réglage `paused`, relu de même) l'empêche de lancer quoi que ce soit ; `resume` lève la pause.
+  `codex-queue fair on` (réglage `fair`, relu de même) sert les sessions à tour de rôle : à chaque place libre, parmi
+  les lots de la meilleure priorité, il prend celui de la session qui a le moins de lots en cours. `codex-queue
+  interleave`, au contraire, réécrit une fois le champ `order` des lots en attente pour alterner les sessions ; les lots
+  déposés ensuite passent après eux.
   Chaque `codex exec` part dans sa propre session de processus (il survit à la session Claude qui l'a déposé), sa
   sortie dans `logs/<id>.log`.
 - **Un lot dont tous les fichiers attendus existent** est marqué `done` sans être lancé : on peut redéposer un lot
@@ -39,7 +43,8 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
 - Un répartiteur relancé retrouve les lots en cours par leur pid.
 - **La page** (`codex-queue ui`, http://127.0.0.1:8765/, locale seulement) relit la file toutes les 3 secondes. On y
   glisse les lots en attente pour les réordonner (le lot prend la priorité de son voisin du dessus), on les met de côté,
-  on les annule, on met toute la file en pause ; on trie les listes par priorité, demande, début, fin, libellé ou
+  on les annule, on met toute la file en pause, on sert les sessions à tour de rôle ou on les entrelace une fois
+  (la file affiche l'ordre de lancement calculé par le serveur ; en tour de rôle, le glisser-déposer est désactivé) ; on trie les listes par priorité, demande, début, fin, libellé ou
   session (le glisser-déposer ne marche qu'en « ordre de passage ») ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
   `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), la session codex étant lue sur la ligne
   `session id:` du journal. Un clic sur une session montre les images de tous ses lots encore conservés.
@@ -63,6 +68,8 @@ codex-queue release <sélection>                 # les remet en attente
 codex-queue cancel <sélection>                  # abandonne ceux qui attendent, arrête ceux qui tournent
 codex-queue slots [N]                           # montre ou fixe le nombre de codex exec en parallèle (1 à 32)
 codex-queue pause | resume                      # met toute la file en pause (les lots en cours finissent), ou la relance
+codex-queue fair [on|off]                       # montre ou fixe le tour de rôle entre sessions
+codex-queue interleave                          # réécrit une fois l'ordre des lots en attente en alternant les sessions
 codex-queue ui [--port 8765]                    # page web locale de la file
 ```
 

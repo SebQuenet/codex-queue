@@ -85,6 +85,8 @@
 <header>
   <h1><span id="dispatcher" class="dot"></span>codex-queue</h1>
   <button id="pause"></button>
+  <label title="à chaque place libre, le répartiteur sert la session qui a le moins de lots en cours (la priorité passe toujours d'abord)"><input type="checkbox" id="fair"> sessions à tour de rôle</label>
+  <button id="interleave" title="réécrire une fois l'ordre de la file en alternant les sessions ; les lots déposés ensuite passent après">entrelacer les sessions</button>
   <label>places <select id="slots"></select></label>
   <label>session <select id="session-filter"><option value="">toutes</option></select></label>
   <label>trier par <select id="sort-key">
@@ -116,6 +118,8 @@ const POLL_MILLISECONDS = 3000;
 const FINISHED_STATES = ['done', 'failed', 'cancelled'];
 let jobs = [];
 let isQueuePaused = false;
+let isFairMode = false;
+let launchRank = new Map(); // job id -> place in the dispatcher's launch order, from the server
 let selection = null; // {kind: 'job', id} or {kind: 'session', name}
 let draggedId = null;
 let lightboxImages = [];
@@ -179,6 +183,9 @@ async function refresh() {
 
 function renderHeader(state) {
   isQueuePaused = state.paused;
+  isFairMode = state.fair;
+  launchRank = new Map(state.launch_order.map((jobId, index) => [jobId, index]));
+  if (document.activeElement !== $('#fair')) $('#fair').checked = state.fair;
   const pauseButton = $('#pause');
   pauseButton.dataset.paused = state.paused;
   pauseButton.classList.toggle('paused', state.paused);
@@ -307,11 +314,13 @@ function renderLists() {
   };
   $('#sort-direction').textContent = sort.isDescending ? '↓' : '↑';
   $('#sort-direction').disabled = isQueueOrder();
-  $('#drag-hint').hidden = !isQueueOrder();
+  const canDrag = isQueueOrder() && !isFairMode;
+  $('#drag-hint').hidden = !canDrag;
   fill($('#running'), sortedJobs(shown.filter((job) => job.state === 'running'), (first, second) => first.started - second.started), false);
-  const queued = sortedJobs(queuedJobs(shown), byQueueOrder);
+  const byLaunchOrder = (first, second) => (launchRank.get(first.id) ?? Infinity) - (launchRank.get(second.id) ?? Infinity) || byQueueOrder(first, second);
+  const queued = sortedJobs(queuedJobs(shown), byLaunchOrder);
   $('#queue-count').textContent = `(${queued.length})`;
-  fill($('#queue'), queued, isQueueOrder(), true);
+  fill($('#queue'), queued, canDrag, true);
   const showFinished = $('#show-finished').checked;
   $('#finished-block').hidden = !showFinished;
   if (showFinished) fill($('#finished'), sortedJobs(shown.filter((job) => FINISHED_STATES.includes(job.state)), (first, second) => second.ended - first.ended), false);
@@ -478,6 +487,8 @@ document.addEventListener('keydown', (event) => {
 
 $('#slots').addEventListener('change', (event) => post('/api/slots', {count: Number(event.target.value)}));
 $('#session-filter').addEventListener('change', renderLists);
+$('#fair').addEventListener('change', (event) => post('/api/fair', {fair: event.target.checked}));
+$('#interleave').addEventListener('click', () => post('/api/interleave', {}));
 $('#pause').addEventListener('click', (event) => post('/api/pause', {paused: event.currentTarget.dataset.paused !== 'true'}));
 function saveSort() {
   try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort)); } catch { /* sort kept for this visit only */ }
