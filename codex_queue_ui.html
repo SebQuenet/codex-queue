@@ -34,6 +34,13 @@
   .row.running { border-left-color: var(--running); }
   .row.held { border-left-color: var(--held); opacity: .7; }
   .row.failed { border-left-color: var(--failed); }
+  .row.running.troubled { border-left-color: var(--held); }
+  .row.stopped { border-left-color: var(--held); }
+  .alert { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 9px; font-size: 11px;
+    background: #3a2f17; color: var(--held); }
+  .alert.quota, .alert.disque-plein { background: #3a1d1b; color: var(--failed); }
+  .end-state.failed, .end-state.killed { color: var(--failed); }
+  .end-state.stopped { color: var(--held); }
   .row.cancelled, .row.done { opacity: .75; }
   .row.dragging { opacity: .3; }
   .row.drop-before { box-shadow: 0 -2px 0 var(--drop); }
@@ -85,6 +92,7 @@
 <header>
   <h1><span id="dispatcher" class="dot"></span>codex-queue</h1>
   <button id="pause"></button>
+  <button id="stop-all" class="danger" title="mettre la file en pause et arrêter tous les codex exec en cours">⏹ tout arrêter</button>
   <button id="retry-missing" hidden title="remettre en attente les lots finis dont un fichier attendu manque (quota atteint, codex tué, référence absente…)"></button>
   <label title="à chaque place libre, le répartiteur sert la session qui a le moins de lots en cours (la priorité passe toujours d'abord)"><input type="checkbox" id="fair"> sessions à tour de rôle</label>
   <button id="interleave" title="réécrire une fois l'ordre de la file en alternant les sessions ; les lots déposés ensuite passent après">entrelacer les sessions</button>
@@ -184,6 +192,7 @@ async function refresh() {
 
 function renderHeader(state) {
   isQueuePaused = state.paused;
+  $('#stop-all').disabled = !jobs.some((job) => job.state === 'running');
   $('#retry-missing').hidden = !state.missing_outputs.length;
   $('#retry-missing').textContent = `↻ relancer les ${state.missing_outputs.length} lots sans leurs fichiers`;
   isFairMode = state.fair;
@@ -215,22 +224,35 @@ function visibleJobs() {
   return session ? jobs.filter((job) => job.session === session) : jobs;
 }
 
+// How a finished job ended, told apart: a cancelled job that had started was stopped while it ran.
+function endState(job) {
+  if (job.state === 'done') return {name: 'réussi', kind: 'done'};
+  if (job.state === 'cancelled') return job.started ? {name: 'arrêté', kind: 'stopped'} : {name: 'annulé', kind: 'cancelled'};
+  if (job.exit_code < 0) return {name: `tué (signal ${-job.exit_code})`, kind: 'killed'};
+  return {name: 'échoué', kind: 'failed'};
+}
+
 function rowHtml(job, draggable, rank = null) {
   const images = job.images.length ? `🖼 ${job.images.length}` : '';
   let timing = '';
   if (job.state === 'running') timing = `depuis ${elapsed(job.started)}`;
-  else if (FINISHED_STATES.includes(job.state)) timing = `${job.state} ${clock(job.ended)}`;
+  else if (FINISHED_STATES.includes(job.state)) {
+    const ending = endState(job);
+    timing = `<span class="end-state ${ending.kind}">${ending.name}</span> ${clock(job.ended)}`;
+  }
   else timing = `demandé ${clock(job.created)}`;
   const buttons = [];
   if (job.state === 'waiting') buttons.push(`<button data-act="hold" title="mettre de côté">❚❚</button>`);
   if (job.state === 'held') buttons.push(`<button data-act="release" title="remettre en attente">▶</button>`);
   if (!FINISHED_STATES.includes(job.state)) buttons.push(`<button class="danger" data-act="cancel" title="annuler">✕</button>`);
   const isSelected = selection?.kind === 'job' && selection.id === job.id;
-  return `<div class="row ${job.state} ${isSelected ? 'selected' : ''}" data-id="${job.id}" ${draggable ? 'draggable="true"' : ''}>
+  const alert = job.alert ? `<span class="alert ${job.alert.kind.replace(' ', '-')}" title="${escapeHtml(job.alert.line)}">⚠ ${escapeHtml(job.alert.kind)}</span>` : '';
+  const stateClasses = `${job.state} ${job.alert ? 'troubled' : ''} ${endState(job).kind === 'stopped' ? 'stopped' : ''}`;
+  return `<div class="row ${stateClasses} ${isSelected ? 'selected' : ''}" data-id="${job.id}" ${draggable ? 'draggable="true"' : ''}>
     <span class="handle">${draggable ? '⋮⋮' : ''}</span>
     <span class="rank" title="rang dans la liste">${rank === null ? '' : `#${rank}`}</span>
     <span class="prio">p${job.priority}</span>
-    <div class="title"><b>${escapeHtml(job.label)}</b><span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>
+    <div class="title"><b>${escapeHtml(job.label)}</b><span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>${alert}
       <div class="sub">${escapeHtml(job.project)} / ${escapeHtml(job.worktree)} · ${job.id}</div></div>
     <span class="meta">${images}<br>${timing}</span>
     <span class="actions">${buttons.join('')}</span>
@@ -501,6 +523,10 @@ document.addEventListener('keydown', (event) => {
 $('#slots').addEventListener('change', (event) => post('/api/slots', {count: Number(event.target.value)}));
 $('#session-filter').addEventListener('change', renderLists);
 $('#fair').addEventListener('change', (event) => post('/api/fair', {fair: event.target.checked}));
+$('#stop-all').addEventListener('click', () => {
+  const runningCount = jobs.filter((job) => job.state === 'running').length;
+  if (confirm(`Mettre la file en pause et arrêter les ${runningCount} lots en cours ?`)) post('/api/stop-all', {});
+});
 $('#retry-missing').addEventListener('click', (event) => {
   if (confirm(`${event.currentTarget.textContent.slice(2)} ?`)) post('/api/retry-missing', {});
 });

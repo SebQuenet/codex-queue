@@ -46,11 +46,13 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
 - Un répartiteur relancé retrouve les lots en cours par leur pid.
 - **La page** (`codex-queue ui`, http://127.0.0.1:8765/, locale seulement) relit la file toutes les 3 secondes. On y
   glisse les lots en attente pour les réordonner (le lot prend la priorité de son voisin du dessus), on les met de côté,
-  on les annule, on met toute la file en pause, on relance les lots finis sans leurs fichiers, on sert les sessions à tour de rôle ou on les entrelace une fois
+  on les annule, on met toute la file en pause ou on arrête tout ce qui tourne, on relance les lots finis sans leurs fichiers, on sert les sessions à tour de rôle ou on les entrelace une fois
   (la file affiche l'ordre de lancement calculé par le serveur ; en tour de rôle, le glisser-déposer est désactivé) ; on trie les listes par priorité, demande, début, fin, libellé ou
   session (le glisser-déposer ne marche qu'en « ordre de passage ») ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
   `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), la session codex étant lue sur la ligne
-  `session id:` du journal. Un clic sur une session montre les images de tous ses lots encore conservés et fixe d'un coup la priorité de
+  `session id:` du journal. Un lot en cours signale le dernier incident lu dans les dernières lignes de son journal
+  (quota, disque plein, hors réseau, reconnexion, erreur) ; un lot fini dit s'il a réussi, échoué, été tué par un
+  signal, arrêté en cours (annulé après son départ) ou annulé avant. Un clic sur une session montre les images de tous ses lots encore conservés et fixe d'un coup la priorité de
   tous ses lots en attente ou mis de côté.
 
 ## Commandes
@@ -75,6 +77,7 @@ codex-queue pause | resume                      # met toute la file en pause (le
 codex-queue fair [on|off]                       # montre ou fixe le tour de rôle entre sessions
 codex-queue interleave                          # réécrit une fois l'ordre des lots en attente en alternant les sessions
 codex-queue retry-missing                       # remet en attente les lots finis dont un fichier attendu manque
+codex-queue stop-all                            # met la file en pause et arrête tous les lots en cours
 codex-queue ui [--port 8765]                    # page web locale de la file
 ```
 

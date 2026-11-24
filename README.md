@@ -34,6 +34,7 @@ codex-queue pause | resume            # plus aucun lot ne démarre (ceux en cour
 codex-queue fair [on|off]             # sessions servies à tour de rôle (la priorité passe d'abord)
 codex-queue interleave                # réécrit une fois l'ordre de la file en alternant les sessions
 codex-queue retry-missing             # relance les lots finis dont un fichier attendu manque
+codex-queue stop-all                  # met la file en pause et arrête tous les lots en cours
 codex-queue keep [6h]                 # durée de conservation des lots finis
 codex-queue ui [--port 8765]          # page web locale
 ```

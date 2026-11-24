@@ -25,6 +25,7 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue fair [on|off]                   take turns between sessions at each free slot (priority still first)
   codex-queue interleave                      rewrite the queue order once so that sessions alternate
   codex-queue retry-missing                   queue again the finished jobs whose expected files are missing
+  codex-queue stop-all                        pause the queue and stop every running job
   codex-queue dispatch                        the dispatcher itself (`add` starts it when it is not running)
   codex-queue ui [--port 8765]                web page on localhost: drag jobs to reorder them, hold, cancel, and see
                                               the images each Codex session generated
@@ -333,6 +334,21 @@ def cancel_job(job: dict) -> bool:
     return True
 
 
+def stop_all_running() -> list:
+    """Pauses the queue, else the dispatcher would fill the freed slots at once, then stops every running job."""
+    set_paused(True)
+    stopped = [job for job in all_jobs() if job['state'] == 'running']
+    for job in stopped:
+        cancel_job(job)
+    return stopped
+
+
+def stop_all(arguments) -> None:
+    for job in stop_all_running():
+        print(job['id'], job['label'], 'stopped')
+    print('queue paused')
+
+
 def set_priority(arguments) -> None:
     for job in matching(arguments):
         if reprioritize_job(job, arguments.priority):
@@ -481,6 +497,8 @@ def dispatch(arguments) -> None:
             finished = child.poll() is not None if child else not is_alive(job.get('pid', 0))
             if finished:
                 code = child.returncode if child else 0
+                if child:
+                    job['exit_code'] = code
                 job.update(state=final_state(job, code), ended=time.time())
                 write_job(job)
                 children.pop(job['id'], None)
@@ -523,10 +541,37 @@ def generated_images(codex_session: str) -> list:
     return [path.name for path in sorted((path for path in folder.iterdir() if path.is_file()), key=lambda path: path.stat().st_mtime)]
 
 
+# Trouble a running codex exec reports in its log, checked in this order on its last lines.
+ALERT_PATTERNS = (
+    ('quota', re.compile(r'usage_limit_reached|The usage limit has been reached|Too Many Requests')),
+    ('disque plein', re.compile(r'No space left on device|StorageFull')),
+    ('hors réseau', re.compile(r'waiting for network|failed to lookup address')),
+    ('reconnexion', re.compile(r'Reconnecting|stream disconnected|failed to connect to websocket')),
+    ('erreur', re.compile(r'\bERROR\b|\bError:')),
+)
+# Logged every few minutes by every healthy codex exec: not a sign of trouble.
+HARMLESS_LOG_LINE = re.compile(r'failed to (refresh available models|renew cache TTL|write models cache)')
+ALERT_LINES = 12
+
+
+def running_alert(job: dict) -> dict | None:
+    """The latest trouble among the last lines of a running job's log, or None while it looks healthy."""
+    if job['state'] != 'running':
+        return None
+    last_lines = [line for line in log_tail(job['id']).splitlines() if line.strip()][-ALERT_LINES:]
+    for line in reversed(last_lines):
+        if HARMLESS_LOG_LINE.search(line):
+            continue
+        for kind, pattern in ALERT_PATTERNS:
+            if pattern.search(line):
+                return {'kind': kind, 'line': line.strip()[:300]}
+    return None
+
+
 def job_summary(job: dict) -> dict:
     codex_session = codex_session_of(job)
     summary = {key: job_value for key, job_value in job.items() if key != 'prompt'}
-    return {**summary, 'codex_session': codex_session, 'images': generated_images(codex_session)}
+    return {**summary, 'codex_session': codex_session, 'images': generated_images(codex_session), 'alert': running_alert(job)}
 
 
 def job_by_id(job_id: str) -> dict | None:
@@ -632,6 +677,9 @@ class QueuePage(BaseHTTPRequestHandler):
             error = None if isinstance(is_taking_turns, bool) else 'fair must be true or false'
             if error is None:
                 save_setting('fair', is_taking_turns)
+        elif path == '/api/stop-all':
+            stop_all_running()
+            error = None
         elif path == '/api/retry-missing':
             retry_missing_outputs()
             error = None
@@ -700,6 +748,7 @@ def main() -> None:
     taking_turns.set_defaults(handler=set_fair)
     commands.add_parser('interleave').set_defaults(handler=interleave)
     commands.add_parser('retry-missing').set_defaults(handler=retry_missing)
+    commands.add_parser('stop-all').set_defaults(handler=stop_all)
     commands.add_parser('resume').set_defaults(handler=resume)
     commands.add_parser('dispatch').set_defaults(handler=dispatch)
     sizing = commands.add_parser('slots')
