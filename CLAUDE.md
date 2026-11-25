@@ -58,7 +58,7 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
 ## Commandes
 
 ```sh
-codex-queue add --priority 5 --label <lot> --workdir <dossier> --prompt-file <consigne.txt> \
+codex-queue add --priority 5 --label <lot> [--workdir <dossier>] --prompt-file <consigne.txt> \
   [--add-dir <dossier>]... [--skip-if-exists <fichier>...] [--origin <worktree>] [--session <nom>] [--caller <id>] \
   [-- <options de codex exec : -s workspace-write, -o <fichier>, -m <modèle>…>]
 codex-queue wait <id>                           # attend la fin du lot, affiche son état et son journal
@@ -83,9 +83,11 @@ codex-queue ui [--port 8765]                    # page web locale de la file
 
 Les sélecteurs (identifiants, `--session`, `--label`) se combinent ; sans sélecteur, la commande refuse d'agir.
 
-`add` affiche l'identifiant du lot. `--workdir` est le `-C` de `codex exec`, les options après `--` lui sont passées
-telles quelles. Pour être prévenu de la fin d'un lot, une session lance `codex-queue wait <id>` en arrière-plan : la
-commande se termine quand le lot est fini (code 0 s'il a réussi).
+`add` affiche l'identifiant du lot. `--workdir` est le `-C` de `codex exec` ; par défaut, la file donne au lot son
+propre dossier, `work/<id>`, effacé avec sa fiche : un dossier temporaire de l'appelant (le scratchpad d'une session
+Claude) peut disparaître pendant que le lot tourne, et Codex ne peut alors plus lancer aucune commande. Les options
+après `--` sont passées telles quelles à `codex exec`. Pour être prévenu de la fin d'un lot, une session lance
+`codex-queue wait <id>` en arrière-plan : la commande se termine quand le lot est fini (code 0 s'il a réussi).
 
 ## Règles
 

@@ -9,7 +9,7 @@ Each job records where it comes from: its project (the main git repository), its
 --origin (the current directory by default), and its caller (--caller, else $CODEX_QUEUE_CALLER, else the Claude Code
 session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else the branch.
 
-  codex-queue add --priority 5 --label <what> --workdir <dir> --prompt-file <file> [--add-dir <dir>]...
+  codex-queue add --priority 5 --label <what> [--workdir <dir>] --prompt-file <file> [--add-dir <dir>]...
                   [--origin <project dir>] [--session <s>] [--caller <id>] [-- <codex exec options>]
   codex-queue wait <id>                       blocks until the job ends, prints its state and log
   codex-queue list [--session <s>] [--since 1h | --all]   jobs by session: running, waiting and held; --since adds
@@ -36,6 +36,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -48,6 +49,7 @@ ROOT = Path(os.environ.get('CODEX_QUEUE_DIR', Path.home() / '.local/state/codex-
 JOBS = ROOT / 'jobs'
 LOGS = ROOT / 'logs'
 LOCK = ROOT / 'dispatcher.lock'
+WORK = ROOT / 'work'
 DEFAULT_SLOTS = 4
 SETTINGS = ROOT / 'settings.json'
 POLL_SECONDS = 5
@@ -263,8 +265,11 @@ def add(arguments) -> None:
     LOGS.mkdir(parents=True, exist_ok=True)
     prompt = Path(arguments.prompt_file).read_text()
     origin = origin_of(Path(arguments.origin).resolve())
+    job_id = uuid.uuid4().hex[:8]
+    # The queue owns the default workdir: a caller's temporary folder may vanish while the job runs.
+    workdir = Path(arguments.workdir).resolve() if arguments.workdir else WORK / job_id
     job = {
-        'id': uuid.uuid4().hex[:8],
+        'id': job_id,
         'label': arguments.label,
         'session': arguments.session or os.environ.get('CODEX_QUEUE_SESSION') or origin['branch'] or origin['worktree'],
         'caller': arguments.caller or os.environ.get('CODEX_QUEUE_CALLER') or os.environ.get('CLAUDE_CODE_SESSION_ID', ''),
@@ -272,7 +277,7 @@ def add(arguments) -> None:
         'priority': arguments.priority,
         'created': time.time(),
         'state': 'waiting',
-        'workdir': str(Path(arguments.workdir).resolve()),
+        'workdir': str(workdir),
         'add_dirs': [str(Path(directory).resolve()) for directory in arguments.add_dir],
         'prompt': prompt,
         'codex_options': arguments.codex_options,
@@ -505,6 +510,7 @@ def dispatch(arguments) -> None:
         for job in jobs:
             if job['state'] in ('done', 'failed', 'cancelled') and time.time() - job.get('ended', job['created']) > kept_seconds():
                 (JOBS / f"{job['id']}.json").unlink(missing_ok=True)
+                shutil.rmtree(WORK / job['id'], ignore_errors=True)
         running = sum(1 for job in jobs if job['state'] == 'running')
         waiting = launch_order([job for job in jobs if job['state'] == 'waiting'], running_by_session(jobs), is_fair())
         for job in waiting:
@@ -711,7 +717,7 @@ def main() -> None:
     adding = commands.add_parser('add')
     adding.add_argument('--priority', type=int, default=5, choices=range(1, 10))
     adding.add_argument('--label', required=True)
-    adding.add_argument('--workdir', required=True)
+    adding.add_argument('--workdir', help=f'codex exec -C (default: {WORK}/<id>, kept by the queue)')
     adding.add_argument('--prompt-file', required=True)
     adding.add_argument('--add-dir', action='append', default=[])
     adding.add_argument('--skip-if-exists', nargs='*', default=[], help='output files: the job is skipped once all exist')

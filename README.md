@@ -21,7 +21,7 @@ Il faut `codex` dans le `PATH`. Linux ou macOS (le script utilise `flock` et les
 
 ```sh
 # Déposer un lot : la consigne est lue dans un fichier, les options après -- vont à codex exec
-codex-queue add --priority 5 --label portrait-01 --workdir /tmp/lot --prompt-file consigne.txt \
+codex-queue add --priority 5 --label portrait-01 --prompt-file consigne.txt \
   --skip-if-exists art/portrait-01.png -- -s workspace-write
 
 codex-queue wait <id>                 # attend la fin du lot (code 0 s'il a réussi)
