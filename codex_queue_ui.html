@@ -245,6 +245,7 @@ function rowHtml(job, draggable, rank = null) {
   if (job.state === 'waiting') buttons.push(`<button data-act="hold" title="mettre de côté">❚❚</button>`);
   if (job.state === 'held') buttons.push(`<button data-act="release" title="remettre en attente">▶</button>`);
   if (!FINISHED_STATES.includes(job.state)) buttons.push(`<button class="danger" data-act="cancel" title="annuler">✕</button>`);
+  if (job.retryable) buttons.push(`<button data-act="retry" title="relancer le lot (même identifiant)">↻</button>`);
   const isSelected = selection?.kind === 'job' && selection.id === job.id;
   const alert = job.alert ? `<span class="alert ${job.alert.kind.replace(' ', '-')}" title="${escapeHtml(job.alert.line)}">⚠ ${escapeHtml(job.alert.kind)}</span>` : '';
   const stateClasses = `${job.state} ${job.alert ? 'troubled' : ''} ${endState(job).kind === 'stopped' ? 'stopped' : ''}`;

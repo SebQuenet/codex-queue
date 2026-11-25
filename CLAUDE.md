@@ -26,8 +26,14 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
 - **Les états** : `waiting` (attend son tour), `held` (mis de côté, ignoré par le répartiteur), `running`, puis
   `done`, `failed` ou `cancelled`. Les lots finis restent dans la file le temps fixé par `codex-queue keep` (6 h par défaut,
   réglage relu en direct), puis leur fiche est effacée ; leur journal reste dans `logs/`.
+- **Relancer un lot** : un lot `failed` ou `cancelled`, ou `done` sans tous ses fichiers attendus, se remet en attente
+  sous le même identifiant, avec sa priorité et sa place (`codex-queue retry <sélection>`, ou le bouton ↻ de sa ligne
+  sur la page) ; `codex-queue wait <id>` attend alors sa nouvelle fin. Rien n'est relancé tout seul. Le lot repart avec
+  la même consigne entière : pour ne refaire qu'une partie, déposer un nouveau lot avec une consigne réduite. À la fin
+  d'un lot relançable, `wait` affiche la commande de relance (`retry: codex-queue retry <id> && codex-queue wait <id>`).
 - **Le répartiteur** (`codex-queue dispatch`) est unique, garanti par un verrou `flock` sur
-  `dispatcher.lock`. `add` et `release` le démarrent s'il ne tourne pas ; il s'arrête seul quand la file est vide.
+  `dispatcher.lock`. `add`, `release` et `retry` le démarrent s'il ne tourne pas ; il s'arrête seul quand la file
+  est restée vide une minute.
   Toutes les 5 secondes il relève les lots finis, puis lance les lots en attente jusqu'au nombre de places
   (`codex-queue slots`, 4 par défaut, rangé dans `settings.json` et relu à chaque tour : le changer agit tout de suite,
   sans relancer le répartiteur ; en le baissant, les lots en cours finissent, rien n'est arrêté).
@@ -46,7 +52,7 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
 - Un répartiteur relancé retrouve les lots en cours par leur pid.
 - **La page** (`codex-queue ui`, http://127.0.0.1:8765/, locale seulement) relit la file toutes les 3 secondes. On y
   glisse les lots en attente pour les réordonner (le lot prend la priorité de son voisin du dessus), on les met de côté,
-  on les annule, on met toute la file en pause ou on arrête tout ce qui tourne, on relance les lots finis sans leurs fichiers, on sert les sessions à tour de rôle ou on les entrelace une fois
+  on les annule, on met toute la file en pause ou on arrête tout ce qui tourne, on relance un lot échoué ou annulé (↻ sur sa ligne) ou tous les lots finis sans leurs fichiers, on sert les sessions à tour de rôle ou on les entrelace une fois
   (la file affiche l'ordre de lancement calculé par le serveur ; en tour de rôle, le glisser-déposer est désactivé) ; on trie les listes par priorité, demande, début, fin, libellé ou
   session (le glisser-déposer ne marche qu'en « ordre de passage ») ; un lot montre son journal, sa consigne et ses images. Les images sont celles du dossier
   `~/.codex/generated_images/<session codex>/` (`$CODEX_HOME`), la session codex étant lue sur la ligne
@@ -76,6 +82,7 @@ codex-queue slots [N]                           # montre ou fixe le nombre de co
 codex-queue pause | resume                      # met toute la file en pause (les lots en cours finissent), ou la relance
 codex-queue fair [on|off]                       # montre ou fixe le tour de rôle entre sessions
 codex-queue interleave                          # réécrit une fois l'ordre des lots en attente en alternant les sessions
+codex-queue retry <sélection>                   # remet en attente des lots échoués ou annulés, même identifiant
 codex-queue retry-missing                       # remet en attente les lots finis dont un fichier attendu manque
 codex-queue stop-all                            # met la file en pause et arrête tous les lots en cours
 codex-queue ui [--port 8765]                    # page web locale de la file

@@ -24,6 +24,7 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue pause | resume                  stop launching waiting jobs (running ones finish), or start again
   codex-queue fair [on|off]                   take turns between sessions at each free slot (priority still first)
   codex-queue interleave                      rewrite the queue order once so that sessions alternate
+  codex-queue retry <selector>               queue again failed or cancelled jobs, under the same id
   codex-queue retry-missing                   queue again the finished jobs whose expected files are missing
   codex-queue stop-all                        pause the queue and stop every running job
   codex-queue dispatch                        the dispatcher itself (`add` starts it when it is not running)
@@ -418,6 +419,8 @@ def wait(arguments) -> None:
         job = read_job(path)
         if job['state'] not in OPEN_STATES:
             print(job['id'], job['label'], job['state'], LOGS / f"{job['id']}.log")
+            if is_retryable(job):
+                print(f"retry: codex-queue retry {job['id']} && codex-queue wait {job['id']}")
             sys.exit(0 if job['state'] == 'done' else 1)
         time.sleep(POLL_SECONDS)
 
@@ -450,14 +453,32 @@ def lacks_outputs(job: dict) -> bool:
     return job['state'] in ('done', 'failed') and bool(job.get('skip_if_exists')) and not outputs_exist(job)
 
 
+def is_retryable(job: dict) -> bool:
+    """A failed or cancelled job, or a done one that did not leave all its expected files."""
+    return job['state'] in ('failed', 'cancelled') or lacks_outputs(job)
+
+
+def retry_job(job: dict) -> bool:
+    """Puts a retryable job back in the queue under the same id, with its priority and place."""
+    if not is_retryable(job):
+        return False
+    for run_field in ('started', 'ended', 'pid', 'exit_code'):
+        job.pop(run_field, None)
+    job['state'] = 'waiting'
+    write_job(job)
+    return True
+
+
+def retry(arguments) -> None:
+    for job in matching(arguments):
+        if retry_job(job):
+            print(job['id'], job['label'], 'waiting')
+    start_dispatcher()
+
+
 def retry_missing_outputs() -> list:
-    """Puts back in the queue, with their priority and place, the finished jobs whose expected files are missing."""
-    retried = [job for job in all_jobs() if lacks_outputs(job)]
-    for job in retried:
-        for run_field in ('started', 'ended', 'pid'):
-            job.pop(run_field, None)
-        job['state'] = 'waiting'
-        write_job(job)
+    """Puts back in the queue the finished jobs whose expected files are missing."""
+    retried = [job for job in all_jobs() if lacks_outputs(job) and retry_job(job)]
     if retried:
         start_dispatcher()
     return retried
@@ -480,6 +501,10 @@ def launch(job: dict) -> subprocess.Popen:
     job.update(state='running', pid=process.pid, started=time.time())
     write_job(job)
     return process
+
+
+def is_queue_busy() -> bool:
+    return any(job['state'] in ('waiting', 'running') for job in all_jobs())
 
 
 def dispatch(arguments) -> None:
@@ -522,10 +547,15 @@ def dispatch(arguments) -> None:
                 continue
             children[job['id']] = launch(job)
             running += 1
-        if not waiting and running == 0 and not any(job['state'] == 'running' for job in all_jobs()):
-            time.sleep(POLL_SECONDS * 12)
-            if not any(job['state'] in ('waiting', 'running') for job in all_jobs()):
+        if not waiting and running == 0 and not is_queue_busy():
+            # Linger a minute before stopping, ready for a job added or retried meanwhile.
+            for _ in range(12):
+                time.sleep(POLL_SECONDS)
+                if is_queue_busy():
+                    break
+            else:
                 return
+            continue
         time.sleep(POLL_SECONDS)
 
 
@@ -577,7 +607,8 @@ def running_alert(job: dict) -> dict | None:
 def job_summary(job: dict) -> dict:
     codex_session = codex_session_of(job)
     summary = {key: job_value for key, job_value in job.items() if key != 'prompt'}
-    return {**summary, 'codex_session': codex_session, 'images': generated_images(codex_session), 'alert': running_alert(job)}
+    return {**summary, 'codex_session': codex_session, 'images': generated_images(codex_session), 'alert': running_alert(job),
+            'retryable': is_retryable(job)}
 
 
 def job_by_id(job_id: str) -> dict | None:
@@ -599,7 +630,7 @@ def log_tail(job_id: str) -> str:
         return ''
 
 
-JOB_ACTIONS = {'hold': hold_job, 'release': release_job, 'cancel': cancel_job}
+JOB_ACTIONS = {'hold': hold_job, 'release': release_job, 'cancel': cancel_job, 'retry': retry_job}
 
 
 def apply_action(request: dict) -> str | None:
@@ -620,7 +651,7 @@ def apply_action(request: dict) -> str | None:
         return f'unknown action: {action}'
     for job in filter(None, map(job_by_id, job_ids)):
         JOB_ACTIONS[action](job)
-    if action == 'release':
+    if action in ('release', 'retry'):
         start_dispatcher()
     return None
 
@@ -748,6 +779,7 @@ def main() -> None:
     selector('hold', hold)
     selector('release', release)
     selector('cancel', cancel)
+    selector('retry', retry)
     commands.add_parser('pause').set_defaults(handler=pause)
     taking_turns = commands.add_parser('fair')
     taking_turns.add_argument('state', nargs='?', choices=('on', 'off'))
