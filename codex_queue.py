@@ -22,7 +22,10 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue release <selector>             give held jobs back to the dispatcher
   codex-queue cancel <selector>              drop waiting jobs, stop running ones
   codex-queue slots [N]                       how many codex exec run at once (4 by default), read live
-  codex-queue pause | resume                  stop launching waiting jobs (running ones finish), or start again
+  codex-queue pause [--until 21:19 | --for 2h] [--reason <why>]   stop launching waiting jobs (running ones finish),
+                                              until that time or until resumed; a Codex usage limit pauses the
+                                              queue on its own until the limit ends, plus a minute
+  codex-queue resume                          lift the pause and release held jobs
   codex-queue fair [on|off]                   take turns between sessions at each free slot (priority still first)
   codex-queue interleave                      rewrite the queue order once so that sessions alternate
   codex-queue retry <selector>               queue again failed or cancelled jobs, under the same id
@@ -108,6 +111,14 @@ def duration_argument(text: str) -> str:
     return text
 
 
+def until_argument(text: str) -> str:
+    try:
+        clock_moment(text, time.time())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f'not a time: {text} (examples: 21:19, "2026-11-27 21:19")')
+    return text
+
+
 def settings() -> dict:
     """Live settings: the dispatcher reads them again at every turn."""
     try:
@@ -119,6 +130,27 @@ def settings() -> dict:
 def save_setting(key: str, value) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     SETTINGS.write_text(json.dumps({**settings(), key: value}))
+
+
+def clock_moment(text: str, now: float) -> float:
+    """'21:19' (its next occurrence) or '2026-11-27 21:19' as a timestamp; ValueError otherwise."""
+    text = text.strip()
+    if re.fullmatch(r'\d{1,2}:\d{2}', text):
+        hour, minute = map(int, text.split(':'))
+        if hour > 23 or minute > 59:
+            raise ValueError(text)
+        today = time.localtime(now)
+        moment = time.mktime((today.tm_year, today.tm_mon, today.tm_mday, hour, minute, 0, 0, 0, -1))
+        return moment if moment > now else moment + DURATION_UNITS['d']
+    return time.mktime(time.strptime(text, '%Y-%m-%d %H:%M'))
+
+
+def pause_end(text: str, now: float) -> float:
+    """The end of a pause asked as a time of day, a date and time, or a duration (30m, 2h)."""
+    try:
+        return clock_moment(text, now)
+    except ValueError:
+        return now + seconds_of(text)
 
 
 def slot_count() -> int:
@@ -190,28 +222,96 @@ def set_fair(arguments) -> None:
     print('sessions take turns' if is_fair() else 'queue order')
 
 
+def active_pause() -> dict | None:
+    """The pause in force: why, by whom, since and until when (until None: until resumed); None once it ends."""
+    stored = settings().get('paused')
+    if stored is True:  # written before pauses kept a reason
+        return {'reason': '', 'by': '', 'at': None, 'until': None}
+    if not isinstance(stored, dict):
+        return None
+    if stored.get('until') is not None and time.time() >= stored['until']:
+        return None
+    return stored
+
+
 def is_paused() -> bool:
     """While paused, the dispatcher launches nothing; running jobs go on to their end."""
-    return settings().get('paused') is True
+    return active_pause() is not None
 
 
-def set_paused(is_pausing: bool) -> None:
+def pause_queue(reason: str, paused_by: str, until: float | None = None) -> None:
+    save_setting('paused', {'reason': reason, 'by': paused_by, 'at': time.time(), 'until': until})
+
+
+def resume_queue() -> None:
     """Resuming also releases every held job, so the whole queue starts again."""
-    save_setting('paused', is_pausing)
-    if not is_pausing:
-        for job in all_jobs():
-            release_job(job)
-        start_dispatcher()
+    save_setting('paused', False)
+    for job in all_jobs():
+        release_job(job)
+    start_dispatcher()
+
+
+def pause_note(pause: dict) -> str:
+    until = f" until {clock(pause['until'])}" if pause.get('until') else ''
+    reason = f": {pause['reason']}" if pause.get('reason') else ''
+    return f"paused{until} by {pause.get('by') or '?'}{reason}"
 
 
 def pause(arguments) -> None:
-    set_paused(True)
-    print('queue paused: no new job starts, running ones finish')
+    now = time.time()
+    if arguments.until:
+        until = clock_moment(arguments.until, now)
+    elif arguments.duration:
+        until = now + seconds_of(arguments.duration)
+    else:
+        until = None
+    pause_queue(arguments.reason.strip(), arguments.by or default_caller() or 'command line', until)
+    start_dispatcher()  # it lifts the pause on time only if it runs
+    print(f'queue {pause_note(active_pause() or {})}: no new job starts, running ones finish')
 
 
 def resume(arguments) -> None:
-    set_paused(False)
+    resume_queue()
     print('queue resumed, held jobs released')
+
+
+QUOTA_PAUSER = 'codex-queue'
+QUOTA_MARGIN_SECONDS = 60
+# codex prints `You've hit your usage limit. ... try again at 9:18 PM.`, with `Nov 27th, 2026 9:18 PM` past today.
+QUOTA_RESET = re.compile(r'usage limit.*try again at ((?:[A-Z][a-z]{2} \d{1,2}(?:st|nd|rd|th), \d{4} )?\d{1,2}:\d{2} [AP]M)')
+
+
+def quota_reset_in(log: str, printed_at: float) -> float | None:
+    """When the usage limit a codex log reports ends, or None if the log reports none."""
+    found = QUOTA_RESET.findall(log)
+    if not found:
+        return None
+    stamp = re.sub(r'(\d)(?:st|nd|rd|th),', r'\1,', found[-1])
+    try:
+        if ',' in stamp:
+            return time.mktime(time.strptime(stamp, '%b %d, %Y %I:%M %p'))
+        hour_of_day = time.strptime(stamp, '%I:%M %p')
+    except ValueError:
+        return None
+    day = time.localtime(printed_at)
+    return time.mktime((day.tm_year, day.tm_mon, day.tm_mday, hour_of_day.tm_hour, hour_of_day.tm_min, 0, 0, 0, -1))
+
+
+def pause_for_quota(job: dict) -> None:
+    """A job stopped by the usage limit pauses the queue until a minute after the limit ends.
+    A longer pause, or one without end, stays as it is."""
+    try:
+        printed_at = (LOGS / f"{job['id']}.log").stat().st_mtime
+    except OSError:
+        return
+    reset = quota_reset_in(log_tail(job['id']), printed_at)
+    if reset is None or reset + QUOTA_MARGIN_SECONDS <= time.time():
+        return
+    until = reset + QUOTA_MARGIN_SECONDS
+    current = active_pause()
+    if current and (current.get('until') is None or current['until'] >= until):
+        return
+    pause_queue(f"quota d'images Codex atteint ({job['label']})", QUOTA_PAUSER, until)
 
 
 def set_slots(arguments) -> None:
@@ -353,7 +453,7 @@ def cancel_job(job: dict) -> bool:
 
 def stop_all_running() -> list:
     """Pauses the queue, else the dispatcher would fill the freed slots at once, then stops every running job."""
-    set_paused(True)
+    pause_queue('tout arrêter', default_caller() or 'command line')
     stopped = [job for job in all_jobs() if job['state'] == 'running']
     for job in stopped:
         cancel_job(job)
@@ -416,8 +516,8 @@ def show(arguments) -> None:
     if arguments.session:
         jobs = [job for job in jobs if job.get('session') == arguments.session]
     sessions = sorted({job.get('session', '?') for job in jobs})
-    if is_paused():
-        print('** queue paused: `codex-queue resume` to start waiting jobs again **')
+    if current := active_pause():
+        print(f'** queue {pause_note(current)}; `codex-queue resume` to start waiting jobs now **')
     for session in sessions:
         own = sorted((job for job in jobs if job.get('session', '?') == session), key=lambda job: (STATES.index(job['state']), *queue_key(job)))
         counts = ', '.join(f"{sum(1 for job in own if job['state'] == state)} {state}" for state in STATES if any(job['state'] == state for job in own))
@@ -553,6 +653,7 @@ def dispatch(arguments) -> None:
                 job.update(state=final_state(job, code), ended=time.time())
                 write_job(job)
                 children.pop(job['id'], None)
+                pause_for_quota(job)
         for job in jobs:
             if job['state'] in ('done', 'failed', 'cancelled') and time.time() - job.get('ended', job['created']) > kept_seconds():
                 (JOBS / f"{job['id']}.json").unlink(missing_ok=True)
@@ -600,7 +701,7 @@ def generated_images(codex_session: str) -> list:
 
 # Trouble a running codex exec reports in its log, checked in this order on its last lines.
 ALERT_PATTERNS = (
-    ('quota', re.compile(r'usage_limit_reached|The usage limit has been reached|Too Many Requests')),
+    ('quota', re.compile(r'usage_limit_reached|usage limit|Too Many Requests')),
     ('disque plein', re.compile(r'No space left on device|StorageFull')),
     ('hors réseau', re.compile(r'waiting for network|failed to lookup address')),
     ('reconnexion', re.compile(r'Reconnecting|stream disconnected|failed to connect to websocket')),
@@ -685,6 +786,24 @@ def apply_action(request: dict) -> str | None:
     return None
 
 
+def apply_pause(request: dict) -> str | None:
+    """Pauses the queue (with a reason, and an end when `until` is given) or resumes it; answers an error or None."""
+    is_pausing, reason, until_text = request.get('paused'), request.get('reason', ''), request.get('until', '')
+    if not isinstance(is_pausing, bool):
+        return 'paused must be true or false'
+    if not is_pausing:
+        resume_queue()
+        return None
+    if not isinstance(reason, str) or not isinstance(until_text, str):
+        return 'reason and until must be text'
+    try:
+        until = pause_end(until_text, time.time()) if until_text.strip() else None
+    except ValueError:
+        return f'not a time nor a duration: {until_text} (examples: 21:19, 2h)'
+    pause_queue(reason.strip(), PAGE_HOLDER, until)
+    return None
+
+
 class QueuePage(BaseHTTPRequestHandler):
     def log_message(self, *arguments) -> None:
         pass
@@ -707,7 +826,7 @@ class QueuePage(BaseHTTPRequestHandler):
         elif parts == ['api', 'jobs']:
             jobs = all_jobs()
             queued = [job for job in jobs if job['state'] in ('waiting', 'held')]
-            self.answer_json({'slots': slot_count(), 'paused': is_paused(), 'fair': is_fair(),
+            self.answer_json({'slots': slot_count(), 'paused': is_paused(), 'pause': active_pause(), 'fair': is_fair(),
                               'missing_outputs': [job['id'] for job in jobs if lacks_outputs(job)],
                               'launch_order': [job['id'] for job in launch_order(queued, running_by_session(jobs), is_fair())],
                               'keep': settings().get('keep', DEFAULT_KEEP), 'dispatcher': is_dispatcher_running(),
@@ -753,10 +872,7 @@ class QueuePage(BaseHTTPRequestHandler):
             interleave_queue()
             error = None
         elif path == '/api/pause':
-            is_pausing = request.get('paused')
-            error = None if isinstance(is_pausing, bool) else 'paused must be true or false'
-            if error is None:
-                set_paused(is_pausing)
+            error = apply_pause(request)
         else:
             return self.answer_json({'error': 'not found'}, 404)
         self.answer_json({'error': error} if error else {'ok': True}, 400 if error else 200)
@@ -811,7 +927,13 @@ def main() -> None:
     selector('release', release)
     selector('cancel', cancel)
     selector('retry', retry)
-    commands.add_parser('pause').set_defaults(handler=pause)
+    pausing = commands.add_parser('pause', help='a session asks the user before pausing the whole queue')
+    pause_end_choice = pausing.add_mutually_exclusive_group()
+    pause_end_choice.add_argument('--until', type=until_argument, help='end of the pause: 21:19 or "2026-11-27 21:19"')
+    pause_end_choice.add_argument('--for', dest='duration', type=duration_argument, help='length of the pause: 30m, 2h')
+    pausing.add_argument('--reason', default='', help='why the queue is paused (shown on the page and in list)')
+    pausing.add_argument('--by', help='who pauses it (default: $CODEX_QUEUE_CALLER, then $CLAUDE_CODE_SESSION_ID)')
+    pausing.set_defaults(handler=pause)
     taking_turns = commands.add_parser('fair')
     taking_turns.add_argument('state', nargs='?', choices=('on', 'off'))
     taking_turns.set_defaults(handler=set_fair)

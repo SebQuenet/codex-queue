@@ -113,7 +113,7 @@
   <span id="counts" class="sub"></span>
   <span id="error"></span>
 </header>
-<div id="paused-banner" hidden>File en pause : aucun lot ne démarre, ceux en cours vont au bout.</div>
+<div id="paused-banner" hidden></div>
 <main>
   <section>
     <h2>Burndown des images</h2><div id="burndown-summary"></div><div id="burndown"></div>
@@ -207,6 +207,7 @@ function renderHeader(state) {
   pauseButton.textContent = isResumeOffered ? '▶ tout reprendre' : '❚❚ tout mettre en pause';
   pauseButton.title = isResumeOffered ? 'lever la pause et remettre en attente les lots mis de côté' : 'ne plus lancer de lot ; ceux en cours vont au bout';
   $('#paused-banner').hidden = !state.paused;
+  if (state.pause) $('#paused-banner').textContent = pauseText(state.pause);
   $('#dispatcher').classList.toggle('on', state.dispatcher);
   $('#dispatcher').title = state.dispatcher ? 'répartiteur actif' : 'répartiteur arrêté';
   const slots = $('#slots');
@@ -233,6 +234,13 @@ function endState(job) {
   if (job.state === 'cancelled') return job.started ? {name: 'arrêté', kind: 'stopped'} : {name: 'annulé', kind: 'cancelled'};
   if (job.exit_code < 0) return {name: `tué (signal ${-job.exit_code})`, kind: 'killed'};
   return {name: 'échoué', kind: 'failed'};
+}
+
+// Why, by whom and until when the queue is paused: a Codex usage limit pauses it on its own.
+function pauseText(pause) {
+  const until = pause.until ? `jusqu'à ${clock(pause.until)}` : "jusqu'à reprise";
+  const reason = pause.reason ? ` : ${pause.reason}` : '';
+  return `File en pause ${until}, par ${pause.by || 'inconnu'}${reason}. Aucun lot ne démarre, ceux en cours vont au bout.`;
 }
 
 // Why a held job is set aside, by whom and since when: a Claude session may have held it, not the user.
@@ -549,7 +557,13 @@ $('#retry-missing').addEventListener('click', (event) => {
   if (confirm(`${event.currentTarget.textContent.slice(2)} ?`)) post('/api/retry-missing', {});
 });
 $('#interleave').addEventListener('click', () => post('/api/interleave', {}));
-$('#pause').addEventListener('click', (event) => post('/api/pause', {paused: event.currentTarget.dataset.paused !== 'true'}));
+$('#pause').addEventListener('click', (event) => {
+  if (event.currentTarget.dataset.paused === 'true') return post('/api/pause', {paused: false});
+  const reason = prompt('Pourquoi mettre la file en pause ?');
+  if (reason === null) return;
+  const until = prompt("Jusqu'à quand ? Une heure (21:19) ou une durée (30m, 2h) ; vide : jusqu'à reprise.", '');
+  if (until !== null) post('/api/pause', {paused: true, reason, until});
+});
 function saveSort() {
   try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort)); } catch { /* sort kept for this visit only */ }
   renderLists();
