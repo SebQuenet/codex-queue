@@ -18,7 +18,8 @@ session id). It belongs to a session: --session, else $CODEX_QUEUE_SESSION, else
   codex-queue priority <1-9> <id>...         new priority of waiting or held jobs, chosen by id,
   codex-queue priority <1-9> --session <s>   by session,
   codex-queue priority <1-9> --label <p>     or by label prefix (the selectors combine)
-  codex-queue hold | release <selector>      keep jobs out of the dispatcher, or give them back
+  codex-queue hold --reason <why> <selector>  keep jobs out of the dispatcher, saying why (shown on the page)
+  codex-queue release <selector>             give held jobs back to the dispatcher
   codex-queue cancel <selector>              drop waiting jobs, stop running ones
   codex-queue slots [N]                       how many codex exec run at once (4 by default), read live
   codex-queue pause | resume                  stop launching waiting jobs (running ones finish), or start again
@@ -264,6 +265,10 @@ def origin_of(directory: Path) -> dict:
     }
 
 
+def default_caller() -> str:
+    return os.environ.get('CODEX_QUEUE_CALLER') or os.environ.get('CLAUDE_CODE_SESSION_ID', '')
+
+
 def add(arguments) -> None:
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -276,7 +281,7 @@ def add(arguments) -> None:
         'id': job_id,
         'label': arguments.label,
         'session': arguments.session or os.environ.get('CODEX_QUEUE_SESSION') or origin['branch'] or origin['worktree'],
-        'caller': arguments.caller or os.environ.get('CODEX_QUEUE_CALLER') or os.environ.get('CLAUDE_CODE_SESSION_ID', ''),
+        'caller': arguments.caller or default_caller(),
         **origin,
         'priority': arguments.priority,
         'created': time.time(),
@@ -314,10 +319,12 @@ def reprioritize_job(job: dict, priority: int, order: float | None = None) -> bo
     return True
 
 
-def hold_job(job: dict) -> bool:
+def hold_job(job: dict, reason: str, held_by: str) -> bool:
+    """A held job keeps why, by whom and when it was set aside, until it is released."""
     if job['state'] != 'waiting':
         return False
     job['state'] = 'held'
+    job['hold'] = {'reason': reason, 'by': held_by, 'at': time.time()}
     write_job(job)
     return True
 
@@ -326,6 +333,7 @@ def release_job(job: dict) -> bool:
     if job['state'] != 'held':
         return False
     job['state'] = 'waiting'
+    job.pop('hold', None)
     write_job(job)
     return True
 
@@ -365,9 +373,12 @@ def set_priority(arguments) -> None:
 
 
 def hold(arguments) -> None:
+    reason = arguments.reason.strip()
+    if not reason:
+        sys.exit('give a reason: --reason "<why>"')
     for job in matching(arguments):
-        if hold_job(job):
-            print(job['id'], job['label'], 'held')
+        if hold_job(job, reason, arguments.by or default_caller() or 'command line'):
+            print(job['id'], job['label'], 'held:', reason)
 
 
 def release(arguments) -> None:
@@ -393,6 +404,13 @@ def clock(moment: float) -> str:
     return time.strftime('%d/%m %H:%M', time.localtime(moment))
 
 
+def hold_note(job: dict) -> str:
+    if job['state'] != 'held':
+        return ''
+    hold = job.get('hold') or {}
+    return f"  [held by {hold.get('by') or '?'}: {hold.get('reason') or 'no reason given'}]"
+
+
 def show(arguments) -> None:
     jobs = [job for job in all_jobs() if is_listed(job, arguments)]
     if arguments.session:
@@ -410,7 +428,7 @@ def show(arguments) -> None:
         print(f"  {'state':9} {'p':2} {'id':8}  {'demandé':11}  {'début':11}  {'fin':11}  label")
         for job in own:
             times = [clock(job['created']), clock(job['started']) if 'started' in job else 'null', clock(job['ended']) if 'ended' in job else 'null']
-            print(f"  {job['state']:9} p{job['priority']} {job['id']}  {times[0]:11}  {times[1]:11}  {times[2]:11}  {job['label']}")
+            print(f"  {job['state']:9} p{job['priority']} {job['id']}  {times[0]:11}  {times[1]:11}  {times[2]:11}  {job['label']}{hold_note(job)}")
     if not jobs:
         print('queue empty')
 
@@ -633,7 +651,8 @@ def log_tail(job_id: str) -> str:
         return ''
 
 
-JOB_ACTIONS = {'hold': hold_job, 'release': release_job, 'cancel': cancel_job, 'retry': retry_job}
+JOB_ACTIONS = {'release': release_job, 'cancel': cancel_job, 'retry': retry_job}
+PAGE_HOLDER = 'page'
 
 
 def apply_action(request: dict) -> str | None:
@@ -649,6 +668,13 @@ def apply_action(request: dict) -> str | None:
             return 'order must be a number'
         for job in filter(None, map(job_by_id, job_ids)):
             reprioritize_job(job, priority, order)
+        return None
+    if action == 'hold':
+        reason = request.get('reason')
+        if not isinstance(reason, str) or not reason.strip():
+            return 'a hold needs a reason'
+        for job in filter(None, map(job_by_id, job_ids)):
+            hold_job(job, reason.strip(), PAGE_HOLDER)
         return None
     if action not in JOB_ACTIONS:
         return f'unknown action: {action}'
@@ -779,7 +805,9 @@ def main() -> None:
         return command
 
     selector('priority', set_priority)
-    selector('hold', hold)
+    holding = selector('hold', hold)
+    holding.add_argument('--reason', required=True, help='why the jobs are set aside (shown on the page and in list)')
+    holding.add_argument('--by', help='who sets them aside (default: $CODEX_QUEUE_CALLER, then $CLAUDE_CODE_SESSION_ID)')
     selector('release', release)
     selector('cancel', cancel)
     selector('retry', retry)

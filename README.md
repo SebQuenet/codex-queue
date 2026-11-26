@@ -27,7 +27,8 @@ codex-queue add --priority 5 --label portrait-01 --prompt-file consigne.txt \
 codex-queue wait <id>                 # attend la fin du lot (code 0 s'il a réussi)
 codex-queue list [--since 1h | --all] # lots par session, avec leurs heures de dépôt, début et fin
 codex-queue priority 2 <id>...        # nouvelle priorité (1 urgent … 9 fond)
-codex-queue hold | release <sélection>  # mettre de côté, remettre en attente
+codex-queue hold --reason <raison> <sélection>  # mettre de côté en disant pourquoi
+codex-queue release <sélection>        # remettre en attente
 codex-queue cancel <sélection>        # abandonner un lot en attente, arrêter un lot en cours
 codex-queue slots [N]                 # nombre de codex exec en parallèle (4 par défaut)
 codex-queue pause | resume            # plus aucun lot ne démarre (ceux en cours finissent), ou reprise (lots mis de côté compris)

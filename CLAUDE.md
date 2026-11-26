@@ -23,7 +23,8 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
   session Claude travaille dans son propre worktree, donc sa propre branche).
 - **La priorité** va de 1 (urgent) à 9 (fond) ; à priorité égale, le plus ancien part d'abord, sauf si la page a
   donné au lot un champ `order` (glisser-déposer) : il remplace alors l'heure de dépôt dans le tri.
-- **Les états** : `waiting` (attend son tour), `held` (mis de côté, ignoré par le répartiteur), `running`, puis
+- **Les états** : `waiting` (attend son tour), `held` (mis de côté, ignoré par le répartiteur ; le lot garde la raison,
+  l'auteur et l'heure de sa mise de côté, montrés sur sa ligne de la page et dans `list`), `running`, puis
   `done`, `failed` ou `cancelled`. Les lots finis restent dans la file le temps fixé par `codex-queue keep` (6 h par défaut,
   réglage relu en direct), puis leur fiche est effacée ; leur journal reste dans `logs/`.
 - **Relancer un lot** : un lot `failed` ou `cancelled`, ou `done` sans tous ses fichiers attendus, se remet en attente
@@ -76,7 +77,8 @@ codex-queue list --since 1h                     # ajoute les lots finis dans l'h
 codex-queue list --all                          # ajoute tous les lots finis encore gardés
 codex-queue keep [2d]                           # montre ou fixe la durée de conservation des lots finis
 codex-queue priority <1-9> <id>... | --session <nom> | --label <préfixe>
-codex-queue hold <sélection>                    # met de côté des lots en attente
+codex-queue hold --reason <raison> <sélection>  # met de côté des lots en attente, en disant pourquoi
+                                                # (--by <qui>, sinon l'appelant) ; la raison s'affiche sur leur ligne
 codex-queue release <sélection>                 # les remet en attente
 codex-queue cancel <sélection>                  # abandonne ceux qui attendent, arrête ceux qui tournent
 codex-queue slots [N]                           # montre ou fixe le nombre de codex exec en parallèle (1 à 32)

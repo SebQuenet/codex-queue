@@ -32,7 +32,9 @@
   .row:hover { background: var(--row-hover); }
   .row.selected { outline: 1px solid var(--accent); }
   .row.running { border-left-color: var(--running); }
-  .row.held { border-left-color: var(--held); opacity: .7; }
+  .row.held { border-left-color: var(--held); }
+  .row.held .handle, .row.held .prio, .row.held .title > b { opacity: .7; }
+  .hold-note { color: var(--held); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
   .row.failed { border-left-color: var(--failed); }
   .row.running.troubled { border-left-color: var(--held); }
   .row.stopped { border-left-color: var(--held); }
@@ -233,6 +235,14 @@ function endState(job) {
   return {name: 'échoué', kind: 'failed'};
 }
 
+// Why a held job is set aside, by whom and since when: a Claude session may have held it, not the user.
+function holdNoteHtml(job) {
+  if (job.state !== 'held') return '';
+  const hold = job.hold ?? {};
+  return `<div class="hold-note">❚❚ mis de côté par ${escapeHtml(hold.by || 'inconnu')}${hold.at ? ` à ${clock(hold.at)}` : ''} : ${
+    escapeHtml(hold.reason || 'aucune raison donnée')}</div>`;
+}
+
 function rowHtml(job, draggable, rank = null) {
   const images = job.images.length ? `🖼 ${job.images.length}` : '';
   let timing = '';
@@ -255,7 +265,7 @@ function rowHtml(job, draggable, rank = null) {
     <span class="rank" title="rang dans la liste">${rank === null ? '' : `#${rank}`}</span>
     <span class="prio">p${job.priority}</span>
     <div class="title"><b>${escapeHtml(job.label)}</b><span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>${alert}
-      <div class="sub">${escapeHtml(job.project)} / ${escapeHtml(job.worktree)} · ${job.id}</div></div>
+      <div class="sub">${escapeHtml(job.project)} / ${escapeHtml(job.worktree)} · ${job.id}</div>${holdNoteHtml(job)}</div>
     <span class="meta">${images}<br>${timing}</span>
     <span class="actions">${buttons.join('')}</span>
   </div>`;
@@ -415,6 +425,11 @@ document.querySelector('main section').addEventListener('click', (event) => {
   const button = event.target.closest('button[data-act]');
   if (button) {
     if (button.dataset.act === 'cancel' && job.state === 'running' && !confirm(`Arrêter ${job.label}, en cours ?`)) return;
+    if (button.dataset.act === 'hold') {
+      const reason = prompt(`Pourquoi mettre ${job.label} de côté ?`)?.trim();
+      if (reason) act('hold', [job.id], {reason});
+      return;
+    }
     act(button.dataset.act, [job.id]);
     return;
   }
@@ -442,6 +457,7 @@ async function renderPanel(isNewSelection = false) {
     <h3>${escapeHtml(job.label)}</h3>
     <span class="row ${job.state}" style="display:inline;padding:1px 6px">${job.state}</span>
     <span class="chip" data-session="${escapeHtml(job.session)}">${escapeHtml(job.session)}</span>
+    ${holdNoteHtml(job)}
     ${isEditable ? `<label style="margin-left:8px;color:var(--muted)">priorité <select id="panel-priority">${
       [1,2,3,4,5,6,7,8,9].map((priority) => `<option ${priority === job.priority ? 'selected' : ''}>${priority}</option>`).join('')}</select></label>` : ''}
     <dl>
