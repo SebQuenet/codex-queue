@@ -37,7 +37,8 @@ lien symbolique `~/.local/bin/codex-queue` vers `codex_queue.py`.
   Toutes les 5 secondes il relève les lots finis, puis lance les lots en attente jusqu'au nombre de places
   (`codex-queue slots`, 4 par défaut, rangé dans `settings.json` et relu à chaque tour : le changer agit tout de suite,
   sans relancer le répartiteur ; en le baissant, les lots en cours finissent, rien n'est arrêté).
-  `codex-queue pause` (réglage `paused`, relu de même) l'empêche de lancer quoi que ce soit ; `resume` lève la pause.
+  `codex-queue pause` (réglage `paused`, relu de même) l'empêche de lancer quoi que ce soit ; `resume` lève la pause et remet en attente les lots mis de côté (sur la page, « tout reprendre »
+  s'affiche dès qu'un lot est en pause ou mis de côté).
   `codex-queue fair on` (réglage `fair`, relu de même) sert les sessions à tour de rôle : à chaque place libre, parmi
   les lots de la meilleure priorité, il prend celui de la session qui a le moins de lots en cours. `codex-queue
   interleave`, au contraire, réécrit une fois le champ `order` des lots en attente pour alterner les sessions ; les lots
@@ -79,7 +80,7 @@ codex-queue hold <sélection>                    # met de côté des lots en att
 codex-queue release <sélection>                 # les remet en attente
 codex-queue cancel <sélection>                  # abandonne ceux qui attendent, arrête ceux qui tournent
 codex-queue slots [N]                           # montre ou fixe le nombre de codex exec en parallèle (1 à 32)
-codex-queue pause | resume                      # met toute la file en pause (les lots en cours finissent), ou la relance
+codex-queue pause | resume                      # met toute la file en pause (les lots en cours finissent), ou la relance avec les lots mis de côté
 codex-queue fair [on|off]                       # montre ou fixe le tour de rôle entre sessions
 codex-queue interleave                          # réécrit une fois l'ordre des lots en attente en alternant les sessions
 codex-queue retry <sélection>                   # remet en attente des lots échoués ou annulés, même identifiant

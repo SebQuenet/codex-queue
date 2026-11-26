@@ -195,8 +195,11 @@ def is_paused() -> bool:
 
 
 def set_paused(is_pausing: bool) -> None:
+    """Resuming also releases every held job, so the whole queue starts again."""
     save_setting('paused', is_pausing)
     if not is_pausing:
+        for job in all_jobs():
+            release_job(job)
         start_dispatcher()
 
 
@@ -207,7 +210,7 @@ def pause(arguments) -> None:
 
 def resume(arguments) -> None:
     set_paused(False)
-    print('queue resumed')
+    print('queue resumed, held jobs released')
 
 
 def set_slots(arguments) -> None:

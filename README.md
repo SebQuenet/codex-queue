@@ -30,7 +30,7 @@ codex-queue priority 2 <id>...        # nouvelle priorité (1 urgent … 9 fond)
 codex-queue hold | release <sélection>  # mettre de côté, remettre en attente
 codex-queue cancel <sélection>        # abandonner un lot en attente, arrêter un lot en cours
 codex-queue slots [N]                 # nombre de codex exec en parallèle (4 par défaut)
-codex-queue pause | resume            # plus aucun lot ne démarre (ceux en cours finissent), ou reprise
+codex-queue pause | resume            # plus aucun lot ne démarre (ceux en cours finissent), ou reprise (lots mis de côté compris)
 codex-queue fair [on|off]             # sessions servies à tour de rôle (la priorité passe d'abord)
 codex-queue interleave                # réécrit une fois l'ordre de la file en alternant les sessions
 codex-queue retry <sélection>         # relance des lots échoués ou annulés, sous le même identifiant
